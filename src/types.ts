@@ -7,7 +7,7 @@
 
 export type SourceType = "file" | "command" | "stdin" | "url";
 
-export type Effort = "quick" | "normal" | "deep" | "auto";
+export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
 
 export type Strategy = "fill" | "deep";
 

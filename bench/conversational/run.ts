@@ -82,7 +82,9 @@ function runMdgSub(corpusRoot: string, pattern: string): SubResult {
   const t0 = Date.now();
   const r = spawnSync(
     "node",
-    [join(repoRoot(), "dist", "index.js"), pattern, "--in", corpusRoot, "--effort", "normal", "--format", "json", "--no-color"],
+    // No --effort flag: exercises mdg's DEFAULT (now "quick" — small
+    // windows, small node cap) which is what an agent calls first.
+    [join(repoRoot(), "dist", "index.js"), pattern, "--in", corpusRoot, "--format", "json", "--no-color"],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 },
   );
   const ms = Date.now() - t0;

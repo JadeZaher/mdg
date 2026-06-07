@@ -54,10 +54,29 @@ automatically once the `mdg` MCP server is configured.
 
 | effort | before | after | max_nodes | use case |
 | :--- | ---: | ---: | ---: | :--- |
-| quick  |   200 |   200 |     10 | Initial recon |
-| normal |   500 |   500 |     30 | Default investigation |
-| deep   |  2000 |  2000 |    100 | Final-answer grounding |
-| auto   |   500 |   500 |     30 | Same as normal (future: heuristic) |
+| **scan**  |  0  |   0 |    200 | Enumerate file:line hits. No context padding. Use when you want a list, not an answer. Cheapest mode. |
+| **quick** | 200 | 200 |     10 | **DEFAULT.** Small windows, small cap. First touch of a topic. |
+| normal | 500 | 500 |     30 | Bump to this when quick was ambiguous. |
+| deep   | 2000 | 2000 |   100 | Final answer grounding — for one targeted query you commit to. |
+| auto   |  500 |  500 |    30 | Reserved (future heuristic sizing). |
+
+### Recommended pattern: scan first, dig deeper on demand
+
+mdg is designed for "less is more on the first turn, with intelligent
+follow-up." Use it that way:
+
+1. **Start with `scan`** when you don't yet know what's relevant —
+   200 node cap with no padding gives you the *list* of file:line
+   hits across the whole search space at ~50 tokens per hit.
+2. **Stash the scan result** (`mdg_stash`) so subsequent searches
+   can scope to those files (`from: <stash-name>`).
+3. **Run small targeted `quick` or `normal` queries in parallel** on
+   the specific files you care about, instead of one huge `deep`
+   query across everything.
+
+This trades token cost for round-trip — perfect for tool-loop agents
+that can run multiple tool calls per turn. It's much cheaper than
+"`deep` first, hope you got everything."
 
 ## The five MCP tools (signatures only)
 

@@ -34,7 +34,7 @@ import type { Node, Source } from "./types.js";
 
 // ─── Public types ───────────────────────────────────────────────────
 
-export type Effort = "quick" | "normal" | "deep" | "auto";
+export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
 export type Strategy = "fill" | "deep";
 
 export interface SearchOptions {
@@ -151,6 +151,11 @@ export interface StashResult {
 // ─── Search ─────────────────────────────────────────────────────────
 
 const EFFORT_DEFAULTS: Record<Effort, { before: number; after: number; maxNodes: number }> = {
+  // "scan" — file:line hit list. No padding, generous max-nodes.
+  // Use when the agent wants to enumerate matches and decide what to
+  // dig into next. Mirrors rg's cost (~50 tok/match) while keeping
+  // mdg's status field, pagination, and stash interop.
+  scan:   { before: 0,    after: 0,    maxNodes: 200 },
   quick:  { before: 200,  after: 200,  maxNodes: 10  },
   normal: { before: 500,  after: 500,  maxNodes: 30  },
   deep:   { before: 2000, after: 2000, maxNodes: 100 },
@@ -199,8 +204,10 @@ export function sampleMedianLineLength(files: string[]): number {
  *   console.log(r.total_nodes, r.nodes[0].match_text);
  */
 export async function search(opts: SearchOptions): Promise<SearchResult> {
-  // Resolve effort defaults.
-  const effort = opts.effort ?? "normal";
+  // Resolve effort defaults. Default is "quick" — cheap by design,
+  // following a "scan first, dig deeper on demand" philosophy.
+  // Agents bump to normal/deep when one shot returned ambiguous nodes.
+  const effort = opts.effort ?? "quick";
   const preset = EFFORT_DEFAULTS[effort];
   const userSetBefore = opts.before !== undefined;
   const userSetAfter = opts.after !== undefined;

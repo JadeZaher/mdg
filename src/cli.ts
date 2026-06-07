@@ -89,6 +89,7 @@ export interface RawArgs {
 }
 
 export const EFFORT_PRESETS: Record<Effort, { before: number; after: number; maxNodes: number }> = {
+  scan:   { before: 0,    after: 0,    maxNodes: 200 },
   quick:  { before: 200,  after: 200,  maxNodes: 10  },
   normal: { before: 500,  after: 500,  maxNodes: 30  },
   deep:   { before: 2000, after: 2000, maxNodes: 100 },
@@ -122,8 +123,15 @@ NODE SIZING
   -n, --max-nodes <n>       Maximum number of nodes to return     [default: 30]
       --max-tokens <n>      Total token budget across all nodes
       --strategy <mode>     How to use --max-tokens: fill|deep    [default: fill]
-  -e, --effort <level>      Preset: quick|normal|deep|auto       [default: normal]
-                            (quick=200t/10n, normal=500t/30n, deep=2000t/100n)
+  -e, --effort <level>      Preset: scan|quick|normal|deep|auto   [default: quick]
+                            scan=0t/200n (just file:line hits, no padding)
+                            quick=200t/10n, normal=500t/30n, deep=2000t/100n
+                            Default is quick: small windows, small node cap.
+                            "Scan first, dig deeper" is the recommended pattern
+                            for agents — start with scan or quick; bump to
+                            normal or deep only when the small result was
+                            ambiguous. Use multiple targeted parallel calls
+                            instead of one huge deep call.
 
 OUTPUT
   -f, --format <fmt>        llm|markdown|json|text               [default: llm]
@@ -351,8 +359,8 @@ export function parseArgs(argv: string[]): RawArgs {
     }
     if (a === "-e" || a === "--effort") {
       const v = requireValue(a, argv, ++i);
-      if (!["quick", "normal", "deep", "auto"].includes(v)) {
-        throw new Error(`--effort must be quick|normal|deep|auto, got: ${v}`);
+      if (!["scan", "quick", "normal", "deep", "auto"].includes(v)) {
+        throw new Error(`--effort must be scan|quick|normal|deep|auto, got: ${v}`);
       }
       args.effort = v as Effort; i++; continue;
     }
@@ -533,7 +541,7 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
   }
 
   // Apply effort preset, then explicit overrides.
-  const effort: Effort = raw.effort ?? "normal";
+  const effort: Effort = raw.effort ?? "quick";
   const preset = EFFORT_PRESETS[effort];
   const before = raw.before ?? preset.before;
   const after = raw.after ?? preset.after;

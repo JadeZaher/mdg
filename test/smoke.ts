@@ -612,7 +612,9 @@ function main() {
   // Test 35: --page slices the result.
   process.stdout.write("\nTest 35: --page 1 with --page-size 5 returns first 5 nodes\n");
   {
-    const r = runBig(["TODO", "--in", big2, "--page", "1", "--page-size", "5", "--format", "json", "--no-color"]);
+    // Use --effort normal (30 nodes) so we have enough items to paginate.
+    // Default is "quick" (10 nodes) — wouldn't span multiple full pages.
+    const r = runBig(["TODO", "--in", big2, "--effort", "normal", "--page", "1", "--page-size", "5", "--format", "json", "--no-color"]);
     assert(r.code === 0, `exit code 0 (got ${r.code})`);
     const json = JSON.parse(r.stdout);
     assert(json.nodes.length === 5, `5 nodes on page 1 (got ${json.nodes.length})`);
@@ -627,7 +629,7 @@ function main() {
   // Test 36: page 2 returns the next slice.
   process.stdout.write("\nTest 36: --page 2 returns the next slice\n");
   {
-    const r = runBig(["TODO", "--in", big2, "--page", "2", "--page-size", "5", "--format", "json", "--no-color"]);
+    const r = runBig(["TODO", "--in", big2, "--effort", "normal", "--page", "2", "--page-size", "5", "--format", "json", "--no-color"]);
     const json = JSON.parse(r.stdout);
     assert(json.nodes.length === 5, `5 nodes on page 2 (got ${json.nodes.length})`);
     assert(json.pagination.has_prev === true, "has_prev = true on page 2");

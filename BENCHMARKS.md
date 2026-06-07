@@ -6,7 +6,7 @@ Automated summary of the most recent `bench/results/*.json` files. Regenerate wi
 npm run bench && npm run bench:agg
 ```
 
-_Generated 2026-06-07T21:43:26.808Z._
+_Generated 2026-06-07T22:06:53.451Z._
 
 ## meso — recall vs budget (mdg)
 
@@ -39,13 +39,13 @@ _Run: 2026-06-07T19:16:07.166Z_
 
 ## conversational — Claude project memory archive
 
-_Corpus: 11366 lines, 570 KB. Run: 2026-06-07T21:39:20.869Z_
+_Corpus: 11366 lines, 570 KB. Run: 2026-06-07T22:05:40.080Z_
 
 | substrate | recall | precision | F1 | tokens | ms |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| mdg | 93% | 100% | 96% | 12798 | 1227 |
-| ripgrep | 100% | 100% | 100% | 1197 | 24 |
-| powershell | 100% | 94% | 96% | 2505 | 386 |
+| mdg | 68% | 100% | 78% | 2710 | 908 |
+| ripgrep | 100% | 100% | 100% | 1197 | 21 |
+| powershell | 100% | 94% | 96% | 2505 | 344 |
 | embed | 46% | 46% | 46% | 18297 | 4 |
 
 ### conversational savings vs ripgrep baseline
@@ -54,9 +54,9 @@ ripgrep at the same recall is the cheapest line-oriented baseline. The savings c
 
 | substrate | recall vs rg | precision vs rg | token cost vs rg | latency vs rg |
 | :--- | ---: | ---: | ---: | ---: |
-| mdg | −7% | +0% | +970% | +5085% |
-| powershell | +0% | −6% | +109% | +1530% |
-| embed | −54% | −54% | +1429% | −84% |
+| mdg | −32% | +0% | +127% | +4191% |
+| powershell | +0% | −6% | +109% | +1526% |
+| embed | −54% | −54% | +1429% | −83% |
 
 ## memory-corpus (section-chunked embeddings)
 
@@ -93,8 +93,8 @@ _Skipped: ANTHROPIC_API_KEY not set_
 
 ## What the numbers mean
 
-- **mdg vs ripgrep on the memory-system corpus (markdown specs + JSON metadata, conductor tracks)**: mdg costs **10.7× more tokens** than rg at 7% less recall and 0% more precision. mdg's value here is the per-match windowed context + structured node metadata + token budget knobs that rg lacks — useful when an agent will *consume* the result, not just list lines.
-- **PowerShell vs ripgrep**: matches rg on recall, **16× slower**. A Windows user without rg pays a real latency tax (PowerShell ~386 ms vs rg ~24 ms).
+- **mdg vs ripgrep on the memory-system corpus (markdown specs + JSON metadata, conductor tracks)**: mdg costs **2.3× more tokens** than rg at 32% less recall and 0% more precision. mdg's value here is the per-match windowed context + structured node metadata + token budget knobs that rg lacks — useful when an agent will *consume* the result, not just list lines.
+- **PowerShell vs ripgrep**: matches rg on recall, **16× slower**. A Windows user without rg pays a real latency tax (PowerShell ~344 ms vs rg ~21 ms).
 - **Embeddings vs regex (literal pattern queries) on the memory corpus**: per-file embeddings got 46% recall. Section-level chunking (`embed-chunked`) does meaningfully better at a fraction of the token cost — see the chunked section above. For *semantic* recall (paraphrased prompts), see the semantic section below.
 - **Meso (small synthetic code corpus)**: mdg quick → 100% recall, 257 tokens. Embedding k=5 → 92% recall, 218 tokens. mdg wins on recall by 8%, costs 18% tokens. **Caveat**: the meso corpus is too small (8 files) to be load-bearing — expanding fixtures is in the backlog.
 
@@ -106,8 +106,8 @@ Auto-generated from the latest run.
 - Mind palace set semantics hold (micro: compose=union, intersect=intersection, prune-keep by recency, graph terminates on cycles). rg has no equivalent of any of these — and mdg's actual pitch is **stash, recall, compose across turns**, which rg structurally cannot do.
 
 **Loses:**
-- Higher token cost than rg (12798 vs 1197). mdg returns windowed nodes (file + match line + sized context); rg returns raw lines. The mdg cost is the windowing budget — knobs let an agent trade context size for tokens, which rg cannot.
-- Cold-start latency vs rg (1227ms vs 24ms, ~52× slower). Node startup + JSON formatter overhead matters in tight agent loops; MCP server warm-call is closer to rg.
+- Higher token cost than rg (2710 vs 1197). mdg returns windowed nodes (file + match line + sized context); rg returns raw lines. The mdg cost is the windowing budget — knobs let an agent trade context size for tokens, which rg cannot.
+- Cold-start latency vs rg (908ms vs 21ms, ~43× slower). Node startup + JSON formatter overhead matters in tight agent loops; MCP server warm-call is closer to rg.
 - One semantic anomaly in `--mp-except` (micro: 1/17). Logged for investigation.
 
 ## What's missing (the comparisons this bench can't make yet)
