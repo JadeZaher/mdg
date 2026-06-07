@@ -18,6 +18,7 @@ import type {
   SortMode,
   SourceInput,
   Strategy,
+  WindowCurve,
 } from "./types.js";
 
 export interface RawArgs {
@@ -86,6 +87,7 @@ export interface RawArgs {
   // Wide-record auto-tune opt-out.
   noAutoTune: boolean;
   sort?: SortMode;
+  windowCurve?: WindowCurve;
   help: boolean;
   version: boolean;
 }
@@ -137,6 +139,13 @@ NODE SIZING
                             gives you the most-recently-changed hits first
                             (a time-ordered memory index). Paginate to dig
                             back into history.
+      --window-curve <fn>   flat|linear|log                        [default: flat]
+                            Per-node token-window decay across the result list.
+                            flat: every node gets the full window (classic).
+                            linear: full at rank 0, decays to ~10% at last rank.
+                            log: window = full / log2(rank+2). Gentler decay.
+                            Combine with --sort recent for "rich context on
+                            what just changed, tight window on older history."
                             Default is quick: small windows, small node cap.
                             "Scan first, dig deeper" is the recommended pattern
                             for agents — start with scan or quick; bump to
@@ -505,6 +514,13 @@ export function parseArgs(argv: string[]): RawArgs {
       }
       args.sort = v as SortMode; i++; continue;
     }
+    if (a === "--window-curve") {
+      const v = requireValue(a, argv, ++i);
+      if (!["flat", "linear", "log"].includes(v)) {
+        throw new Error(`--window-curve must be flat|linear|log, got: ${v}`);
+      }
+      args.windowCurve = v as WindowCurve; i++; continue;
+    }
     if (a === "--ls" || a === "--tree") { args.ls = true; i++; continue; }
     if (a === "--mp-stash-locations") { args.mpStashLocations = true; i++; continue; }
 
@@ -685,6 +701,7 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
     no_auto_tune: raw.noAutoTune,
     auto_tune_eligible: !raw.noAutoTune && raw.before === undefined && raw.after === undefined,
     sort: raw.sort,
+    window_curve: raw.windowCurve,
   } as ResolvedConfig;
 }
 

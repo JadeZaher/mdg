@@ -31,7 +31,7 @@ import {
   pruneAll,
   savePalace,
 } from "./mind-palace.js";
-import { applyTotalBudget, buildNode, loadSourceContent } from "./nodes.js";
+import { applyTotalBudget, applyWindowCurve, buildNode, loadSourceContent } from "./nodes.js";
 import { runRg, RgError, RgNotFoundError } from "./rg.js";
 import {
   captureCommand,
@@ -310,6 +310,11 @@ async function main(): Promise<number> {
       if (ma !== mb) return dir * (ma - mb);
       return (a.match_line ?? 0) - (b.match_line ?? 0);
     });
+  }
+
+  // 6c. Apply window-decay curve before total-budget enforcement.
+  if (config.window_curve && config.window_curve !== "flat") {
+    applyWindowCurve(allNodes, config.window_curve, beforeTokens, afterTokens);
   }
 
   // 7. Apply total token budget.

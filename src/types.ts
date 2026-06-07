@@ -9,6 +9,7 @@ export type SourceType = "file" | "command" | "stdin" | "url";
 
 export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
 export type SortMode = "default" | "recent" | "oldest";
+export type WindowCurve = "flat" | "linear" | "log";
 
 export type Strategy = "fill" | "deep";
 
@@ -130,6 +131,8 @@ export interface ResolvedConfig {
   auto_tune_eligible: boolean;
   /** --sort recent|oldest|default. Order nodes by source file mtime. */
   sort?: SortMode;
+  /** --window-curve flat|linear|log. Per-node window decay across ranks. */
+  window_curve?: WindowCurve;
 }
 
 export interface MindPalaceOps {

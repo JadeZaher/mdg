@@ -148,6 +148,63 @@ function trimAnchoredAtStart(
  *           end; full deep mode would re-build nodes with scaled
  *           per-node budgets (left as a future enhancement).
  */
+/**
+ * Apply a per-node window-decay curve to a list of nodes in place.
+ * Nodes earlier in the list keep more context; later nodes get
+ * progressively less. Pairs with sort modes — e.g. `sort=recent` plus
+ * `windowCurve=linear` means recent files have rich context and older
+ * files get a tighter disambiguating window.
+ */
+export function applyWindowCurve(
+  nodes: Node[],
+  mode: "flat" | "linear" | "log",
+  baseBefore: number,
+  baseAfter: number,
+  tokenModel: TokenModel = defaultTokens,
+): void {
+  if (mode === "flat" || nodes.length === 0) return;
+  const N = nodes.length;
+  for (let i = 0; i < N; i++) {
+    const ratio = curveRatio(i, N, mode);
+    const targetBefore = Math.max(0, Math.floor(baseBefore * ratio));
+    const targetAfter  = Math.max(0, Math.floor(baseAfter  * ratio));
+    trimNodeContext(nodes[i], targetBefore, targetAfter, tokenModel);
+  }
+}
+
+function curveRatio(rank: number, total: number, mode: "linear" | "log"): number {
+  if (mode === "linear") {
+    if (total <= 1) return 1;
+    return Math.max(0.1, 1 - (rank / (total - 1)) * 0.9);
+  }
+  // log
+  return 1 / Math.log2(rank + 2);
+}
+
+/** Drop lines from the outer edges of a node's context until under target tokens. */
+function trimNodeContext(
+  node: Node,
+  targetBeforeTokens: number,
+  targetAfterTokens: number,
+  tokens: TokenModel,
+): void {
+  // Trim context_before from the start (oldest first) until under budget.
+  while (node.context_before.length > 0 && tokens.estimateMany(node.context_before) > targetBeforeTokens) {
+    node.context_before.shift();
+    node.start_line = Math.min(node.match_line, node.start_line + 1);
+  }
+  // Trim context_after from the end until under budget.
+  while (node.context_after.length > 0 && tokens.estimateMany(node.context_after) > targetAfterTokens) {
+    node.context_after.pop();
+    node.end_line = Math.max(node.match_line, node.end_line - 1);
+  }
+  // Recompute total tokens.
+  node.tokens =
+    tokens.estimateMany(node.context_before) +
+    tokens.estimate(node.match_text) +
+    tokens.estimateMany(node.context_after);
+}
+
 export function applyTotalBudget(
   nodes: Node[],
   maxTokens: number | undefined,

@@ -10,7 +10,7 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { applyTotalBudget, buildNode, loadSourceContent } from "./nodes.js";
+import { applyTotalBudget, applyWindowCurve, buildNode, loadSourceContent } from "./nodes.js";
 import { runRg } from "./rg.js";
 import {
   captureCommand,
@@ -37,6 +37,7 @@ import type { Node, Source } from "./types.js";
 export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
 export type Strategy = "fill" | "deep";
 export type SortMode = "default" | "recent" | "oldest";
+export type WindowCurve = "flat" | "linear" | "log";
 
 export interface SearchOptions {
   /** Regex pattern. Required for search. */
@@ -103,6 +104,21 @@ export interface SearchOptions {
    * and to the beginning in `oldest`.
    */
   sort?: SortMode;
+  /**
+   * Token-window decay curve applied across returned nodes.
+   *   "flat" (or undefined): every node gets the full `before`/`after`
+   *     window. The classic behavior.
+   *   "linear": window decays linearly from full at rank 0 down to a
+   *     small floor (~10% of full) at the last rank. Combined with
+   *     `sort: "recent"`, this gives recent nodes rich context and
+   *     older nodes a tight disambiguating window.
+   *   "log": window decays as `full / log2(rank + 2)`. Gentler than
+   *     linear — useful when you want meaningful context several
+   *     ranks deep, not just on the first hit.
+   * In all modes the per-node window is bounded between 0 and the
+   * configured `before`/`after`.
+   */
+  windowCurve?: WindowCurve;
 }
 
 /** Public, harness-friendly node shape. Same as internal Node. */
@@ -335,6 +351,13 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
       // Stable within a file: preserve match-line order.
       return (a.match_line ?? 0) - (b.match_line ?? 0);
     });
+  }
+
+  // Apply window-decay curve before total-budget enforcement so the
+  // smaller windows count against the cap accurately.
+  const windowCurve = opts.windowCurve ?? "flat";
+  if (windowCurve !== "flat") {
+    applyWindowCurve(allNodes, windowCurve, before, after);
   }
 
   const { nodes: budgeted, truncated } = applyTotalBudget(allNodes, opts.maxTokens, strategy);
