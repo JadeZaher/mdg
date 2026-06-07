@@ -36,6 +36,7 @@ import type { Node, Source } from "./types.js";
 
 export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
 export type Strategy = "fill" | "deep";
+export type SortMode = "default" | "recent" | "oldest";
 
 export interface SearchOptions {
   /** Regex pattern. Required for search. */
@@ -92,6 +93,16 @@ export interface SearchOptions {
    * effort-preset windowing regardless of corpus shape.
    */
   noAutoTune?: boolean;
+  /**
+   * Order returned nodes by source file modification time.
+   *   "default" (or undefined): rg's natural traversal order.
+   *   "recent": newest-edited files first. Surfaces what changed
+   *             recently — useful when scan is used as a memory index.
+   *   "oldest": oldest files first.
+   * Non-file sources (cmd / url / stdin) sort to the end in `recent`
+   * and to the beginning in `oldest`.
+   */
+  sort?: SortMode;
 }
 
 /** Public, harness-friendly node shape. Same as internal Node. */
@@ -157,8 +168,10 @@ const EFFORT_DEFAULTS: Record<Effort, { before: number; after: number; maxNodes:
   // This is the "index -> detail" pattern: scan first to find what's
   // relevant; targeted small queries follow up on the chosen file(s).
   // Tokens scale O(n) with hit count (~60 tok/match on average);
-  // recall matches ripgrep when results fit under max_nodes.
-  scan:   { before: 20,   after: 20,   maxNodes: 200 },
+  // maxNodes is intentionally high so scan matches rg's recall AND
+  // precision regardless of hit count. Use --max-tokens if you want
+  // to cap by budget instead.
+  scan:   { before: 20,   after: 20,   maxNodes: 100000 },
   quick:  { before: 200,  after: 200,  maxNodes: 10  },
   normal: { before: 500,  after: 500,  maxNodes: 30  },
   deep:   { before: 2000, after: 2000, maxNodes: 100 },
@@ -299,6 +312,29 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
       if (allNodes.length >= maxNodes) break;
     }
     if (allNodes.length >= maxNodes) break;
+  }
+
+  // Optional ordering by source file mtime.
+  if (opts.sort === "recent" || opts.sort === "oldest") {
+    const mtimes = new Map<string, number>();
+    for (const n of allNodes) {
+      const id = n.source.id;
+      if (mtimes.has(id)) continue;
+      if (n.source.type === "file") {
+        try { mtimes.set(id, statSync(id).mtimeMs); } catch { mtimes.set(id, 0); }
+      } else {
+        // Non-file sources have no mtime; push to one end.
+        mtimes.set(id, opts.sort === "recent" ? -Infinity : Infinity);
+      }
+    }
+    const dir = opts.sort === "recent" ? -1 : 1;
+    allNodes.sort((a, b) => {
+      const ma = mtimes.get(a.source.id) ?? 0;
+      const mb = mtimes.get(b.source.id) ?? 0;
+      if (ma !== mb) return dir * (ma - mb);
+      // Stable within a file: preserve match-line order.
+      return (a.match_line ?? 0) - (b.match_line ?? 0);
+    });
   }
 
   const { nodes: budgeted, truncated } = applyTotalBudget(allNodes, opts.maxTokens, strategy);

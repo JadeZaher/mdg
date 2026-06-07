@@ -8,6 +8,7 @@
 export type SourceType = "file" | "command" | "stdin" | "url";
 
 export type Effort = "scan" | "quick" | "normal" | "deep" | "auto";
+export type SortMode = "default" | "recent" | "oldest";
 
 export type Strategy = "fill" | "deep";
 
@@ -127,6 +128,8 @@ export interface ResolvedConfig {
    * to drop before/after to 0 for wide-record corpora.
    */
   auto_tune_eligible: boolean;
+  /** --sort recent|oldest|default. Order nodes by source file mtime. */
+  sort?: SortMode;
 }
 
 export interface MindPalaceOps {

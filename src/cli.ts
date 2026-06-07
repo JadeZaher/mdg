@@ -15,6 +15,7 @@ import type {
   OutputFormat,
   ResolvedConfig,
   RgOptions,
+  SortMode,
   SourceInput,
   Strategy,
 } from "./types.js";
@@ -84,12 +85,13 @@ export interface RawArgs {
   mpStashLocations: boolean;
   // Wide-record auto-tune opt-out.
   noAutoTune: boolean;
+  sort?: SortMode;
   help: boolean;
   version: boolean;
 }
 
 export const EFFORT_PRESETS: Record<Effort, { before: number; after: number; maxNodes: number }> = {
-  scan:   { before: 20,   after: 20,   maxNodes: 200 },
+  scan:   { before: 20,   after: 20,   maxNodes: 100000 },
   quick:  { before: 200,  after: 200,  maxNodes: 10  },
   normal: { before: 500,  after: 500,  maxNodes: 30  },
   deep:   { before: 2000, after: 2000, maxNodes: 100 },
@@ -124,10 +126,17 @@ NODE SIZING
       --max-tokens <n>      Total token budget across all nodes
       --strategy <mode>     How to use --max-tokens: fill|deep    [default: fill]
   -e, --effort <level>      Preset: scan|quick|normal|deep|auto   [default: quick]
-                            scan=20t/200n (index mode: many hits with tiny
-                              disambiguating windows; pick a file/page,
-                              then bump to quick/normal/deep on that file)
+                            scan=20t/uncapped (index mode: every hit gets a
+                              tiny disambiguating window; matches rg recall
+                              AND precision regardless of hit count; combine
+                              with --sort recent for a time-ordered index)
                             quick=200t/10n, normal=500t/30n, deep=2000t/100n
+      --sort <mode>         default|recent|oldest                  [default: default]
+                            Order returned nodes by source file mtime.
+                            Pairs naturally with scan: "scan + --sort recent"
+                            gives you the most-recently-changed hits first
+                            (a time-ordered memory index). Paginate to dig
+                            back into history.
                             Default is quick: small windows, small node cap.
                             "Scan first, dig deeper" is the recommended pattern
                             for agents — start with scan or quick; bump to
@@ -489,6 +498,13 @@ export function parseArgs(argv: string[]): RawArgs {
     if (a === "--page-size") { args.pageSize = parseInt(requireValue(a, argv, ++i), 10); i++; continue; }
     if (a === "--all") { args.all = true; i++; continue; }
     if (a === "--no-auto-tune") { args.noAutoTune = true; i++; continue; }
+    if (a === "--sort") {
+      const v = requireValue(a, argv, ++i);
+      if (!["default", "recent", "oldest"].includes(v)) {
+        throw new Error(`--sort must be default|recent|oldest, got: ${v}`);
+      }
+      args.sort = v as SortMode; i++; continue;
+    }
     if (a === "--ls" || a === "--tree") { args.ls = true; i++; continue; }
     if (a === "--mp-stash-locations") { args.mpStashLocations = true; i++; continue; }
 
@@ -668,6 +684,7 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
     mp_stash_locations: raw.mpStashLocations,
     no_auto_tune: raw.noAutoTune,
     auto_tune_eligible: !raw.noAutoTune && raw.before === undefined && raw.after === undefined,
+    sort: raw.sort,
   } as ResolvedConfig;
 }
 

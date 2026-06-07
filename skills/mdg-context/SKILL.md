@@ -54,7 +54,7 @@ automatically once the `mdg` MCP server is configured.
 
 | effort | before | after | max_nodes | use case |
 | :--- | ---: | ---: | ---: | :--- |
-| **scan**  |  20  |  20 |    200 | **Index mode.** Many hits with tiny disambiguating windows. Recall ~= rg; tokens scale O(hits). Use first to find what's relevant, then pick which file/page to dig into. |
+| **scan**  |  20  |  20 |   uncapped | **Index mode.** Every hit gets a tiny disambiguating window. Recall AND precision match rg regardless of hit count; tokens scale O(hits). Combine with `--sort recent` for a time-ordered memory index. |
 | **quick** | 200 | 200 |     10 | **DEFAULT.** Small windows, small cap. First touch of a topic. |
 | normal | 500 | 500 |     30 | Bump to this when quick was ambiguous. |
 | deep   | 2000 | 2000 |   100 | Final answer grounding — for one targeted query you commit to. |
@@ -66,17 +66,23 @@ mdg is designed for "less is more on the first turn, with intelligent
 follow-up." Use it that way:
 
 1. **Start with `scan`** when you don't yet know what's relevant —
-   200 node cap with no padding gives you the *list* of file:line
-   hits across the whole search space at ~50 tokens per hit.
-2. **Stash the scan result** (`mdg_stash`) so subsequent searches
+   uncapped node count with a tiny 20+20 token window per hit gives
+   you the *index* of file:line hits across the whole search space
+   at ~60 tokens per hit. Recall and precision both match raw rg.
+2. **Add `--sort recent`** to surface the most-recently-edited files
+   first. The index becomes a *time-ordered memory*: paginate to dig
+   back in history; the first page is always "what just changed."
+3. **Stash the scan result** (`mdg_stash`) so subsequent searches
    can scope to those files (`from: <stash-name>`).
-3. **Run small targeted `quick` or `normal` queries in parallel** on
+4. **Run small targeted `quick` or `normal` queries in parallel** on
    the specific files you care about, instead of one huge `deep`
    query across everything.
 
 This trades token cost for round-trip — perfect for tool-loop agents
 that can run multiple tool calls per turn. It's much cheaper than
-"`deep` first, hope you got everything."
+"`deep` first, hope you got everything." On a memory-system corpus
+(specs + plans + JSON metadata), scan + sort=recent + pagination is
+the natural "browse my recent memory" primitive.
 
 ## The five MCP tools (signatures only)
 

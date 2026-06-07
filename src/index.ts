@@ -290,6 +290,28 @@ async function main(): Promise<number> {
     if (allNodes.length >= config.max_nodes) break;
   }
 
+  // 6b. Optional ordering by source file mtime.
+  if (config.sort === "recent" || config.sort === "oldest") {
+    const { statSync } = await import("node:fs");
+    const mtimes = new Map<string, number>();
+    for (const n of allNodes) {
+      const id = n.source.id;
+      if (mtimes.has(id)) continue;
+      if (n.source.type === "file") {
+        try { mtimes.set(id, statSync(id).mtimeMs); } catch { mtimes.set(id, 0); }
+      } else {
+        mtimes.set(id, config.sort === "recent" ? -Infinity : Infinity);
+      }
+    }
+    const dir = config.sort === "recent" ? -1 : 1;
+    allNodes.sort((a, b) => {
+      const ma = mtimes.get(a.source.id) ?? 0;
+      const mb = mtimes.get(b.source.id) ?? 0;
+      if (ma !== mb) return dir * (ma - mb);
+      return (a.match_line ?? 0) - (b.match_line ?? 0);
+    });
+  }
+
   // 7. Apply total token budget.
   const { nodes: budgetedNodes, truncated } = applyTotalBudget(
     allNodes,
