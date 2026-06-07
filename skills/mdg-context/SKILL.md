@@ -1,4 +1,43 @@
+---
+name: mdg-context
+description: >
+  Token-budgeted codebase search with composable short-term memory.
+  Search files, command output, and URLs for regex patterns. Returns
+  context nodes sized in tokens (not lines) with file:line attribution.
+  Supports effort presets (quick/normal/deep), pagination, and a
+  persistent mind palace of named stashes that can be composed, linked
+  with relationships, pruned by age/tag/count, and traversed as a graph.
+  Use for codebase exploration, multi-step investigation, finding
+  references, and building cross-invocation working memory.
+tools:
+  - mdg_search
+  - mdg_stash
+  - mdg_list_stashes
+  - mdg_get_stash
+  - mdg_drop_stash
+install:
+  npm: npm install -g mdg-cli
+  source: git clone https://github.com/JadeZaher/mdg && cd mdg && npm install && npm run build && npm link
+  verify: mdg --version
+---
+
 # mdg-context — Codebase Context Retrieval Skill
+
+## Quick Start (1-2 commands)
+
+```bash
+# Install globally:
+npm install -g mdg-cli
+
+# Verify:
+mdg --version   # should print "mdg 0.2.0"
+mdg --ls         # should list files in the current directory
+```
+
+If the above fails, install from source:
+```bash
+git clone https://github.com/JadeZaher/mdg.git && cd mdg && npm install && npm run build && npm link
+```
 
 ## Description
 
