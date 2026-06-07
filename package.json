@@ -27,6 +27,7 @@
     "bench:conv": "tsx bench/conversational/run.ts",
     "bench:conv-chunked": "tsx bench/conversational/run-chunked.ts",
     "bench:semantic": "tsx bench/semantic/run.ts",
+    "bench:typo": "tsx bench/typo/run.ts",
     "bench:macro": "tsx bench/macro/run.ts",
     "bench:multiturn": "tsx bench/multiturn/run.ts",
     "bench:compaction": "tsx bench/compaction/run.ts",

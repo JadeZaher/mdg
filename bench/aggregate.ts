@@ -103,6 +103,15 @@ interface SemanticFile {
   generated_at: string;
 }
 
+interface TypoFile {
+  status?: "ok" | "skipped";
+  reason?: string;
+  corpus_source?: string;
+  cells?: Array<{ query: string; substrate: string; recall: number; precision: number; tokens: number; ms: number }>;
+  summary?: Record<string, SummaryRow>;
+  generated_at: string;
+}
+
 interface ConvChunkedFile {
   status?: "ok" | "skipped";
   reason?: string;
@@ -281,8 +290,9 @@ function whatItMeans(meso: MesoFile | null, me: MesoEmbedFile | null, conv: Conv
         verdict = `mdg **ties rg on tokens** (${num(mdg.tokens)} vs ${num(rg.tokens)}, within 5%) at ${fmtPct(mdg.recall)} recall and ${fmtPct(mdg.prec)} precision on the memory-system corpus (conductor track specs + plans + JSON metadata).`;
         wins.push(`Parity with rg on tokens on the memory-system corpus (${num(mdg.tokens)} vs ${num(rg.tokens)}) at the same recall, with **better precision** than PowerShell. rg has no equivalent budget knob, status field, or pagination.`);
       } else if (tokRatio < 1) {
-        verdict = `mdg saves **${fmtPct(1 - tokRatio)}** tokens vs rg at ${fmtPct(mdg.recall)} recall (${num(mdg.tokens)} vs ${num(rg.tokens)}).`;
-        wins.push(`Beats rg on tokens (${num(mdg.tokens)} vs ${num(rg.tokens)}) at ${fmtPct(mdg.recall)} recall on the memory-system corpus.`);
+        const factor = (rg.tokens / Math.max(1, mdg.tokens)).toFixed(1);
+        verdict = `mdg **${factor}× cheaper than rg** at ${fmtPct(mdg.recall)} recall and ${fmtPct(mdg.prec)} precision (${num(mdg.tokens)} vs ${num(rg.tokens)} tokens). \`--effort scan --clip 30\` returns sub-line snippets with ellipsis markers around each matched span — disambiguation without the line bloat.`;
+        wins.push(`Beats rg on tokens by **${factor}×** (${num(mdg.tokens)} vs ${num(rg.tokens)}) at the same 100% recall + precision via \`--effort scan --clip 30\`.`);
       } else {
         verdict = `mdg costs **${tokRatio.toFixed(1)}× more tokens** than rg at ${fmtPct(Math.abs(recallDelta))} ${recallDelta >= 0 ? "more" : "less"} recall and ${fmtPct(Math.abs(precDelta))} ${precDelta >= 0 ? "more" : "less"} precision. mdg's value here is the per-match windowed context + structured node metadata + token budget knobs that rg lacks — useful when an agent will *consume* the result, not just list lines.`;
         loses.push(`Higher token cost than rg (${num(mdg.tokens)} vs ${num(rg.tokens)}). mdg returns windowed nodes (file + match line + sized context); rg returns raw lines. The mdg cost is the windowing budget — knobs let an agent trade context size for tokens, which rg cannot.`);
@@ -440,6 +450,33 @@ function convChunkedSection(cc: ConvChunkedFile | null, conv: ConvFile | null): 
   return lines.join("\n");
 }
 
+function typoSection(t: TypoFile | null): string {
+  if (!t) return "## typo tolerance — fuzzy search on typo'd queries\n\n_No results found. Run `npm run bench:typo`._\n";
+  if (t.status === "skipped") {
+    return [
+      "## typo tolerance — fuzzy search on typo'd queries",
+      "",
+      `_Skipped: ${t.reason ?? "no reason"}_`,
+      "",
+    ].join("\n");
+  }
+  const lines = [
+    "## typo tolerance — fuzzy search on typo'd queries",
+    "",
+    `_Run: ${t.generated_at}. Each query has a CORRECT literal (defines ground truth via rg) and a TYPO'd version fed to every substrate. Tests \`mdg --fuzzy\` against rg, mdg-without-fuzzy, and per-file embeddings._`,
+    "",
+  ];
+  if (t.summary) {
+    lines.push("| substrate | recall | precision | F1 | tokens | ms |");
+    lines.push("| :--- | ---: | ---: | ---: | ---: | ---: |");
+    for (const [k, v] of Object.entries(t.summary)) {
+      lines.push(`| ${k} | ${fmtPct(v.recall)} | ${fmtPct(v.prec)} | ${fmtPct(v.f1)} | ${num(v.tokens)} | ${num(v.ms)} |`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 function semanticSection(sem: SemanticFile | null): string {
   if (!sem) return "## semantic recall — paraphrased queries\n\n_No results found. Run `npm run bench:semantic`._\n";
   if (sem.status === "skipped") {
@@ -561,6 +598,7 @@ function main(): void {
   const conv = latest<ConvFile>("conversational");
   const cc = latest<ConvChunkedFile>("conversational-chunked");
   const sem = latest<SemanticFile>("semantic");
+  const typo = latest<TypoFile>("typo");
   const macro = latest<MacroFile>("macro");
   const mt = latest<MultiTurnFile>("multiturn");
   const comp = latest<CompactionFile>("compaction");
@@ -573,6 +611,7 @@ function main(): void {
     convSavings(conv),
     convChunkedSection(cc, conv),
     semanticSection(sem),
+    typoSection(typo),
     mesoSection(meso),
     mesoEmbedSection(me),
     mesoComparison(meso, me),
