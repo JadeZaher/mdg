@@ -20,6 +20,11 @@ import {
   getStash,
   listStashes,
   loadPalace,
+  pruneExpired,
+  pruneOlderThan,
+  pruneKeep,
+  pruneTag,
+  pruneAll,
   savePalace,
 } from "./mind-palace.js";
 import { applyTotalBudget, buildNode, loadSourceContent } from "./nodes.js";
@@ -79,6 +84,35 @@ async function main(): Promise<number> {
   // 3. Handle mind-palace operations that don't require a search.
   const palacePath = config.mind_palace?.path ?? defaultPalacePath();
   const palace = loadPalace(palacePath);
+
+  // Pruning operations.
+  if (config.mind_palace?.prune_older_than) {
+    const r = pruneOlderThan(palace, config.mind_palace.prune_older_than, config.mind_palace.prune_dry_run ?? false);
+    if (!r.dry_run) savePalace(palacePath, palace);
+    process.stdout.write(formatPruneResult(r));
+    return 0;
+  }
+  if (config.mind_palace?.prune_keep !== undefined) {
+    const r = pruneKeep(palace, config.mind_palace.prune_keep, config.mind_palace.prune_dry_run ?? false);
+    if (!r.dry_run) savePalace(palacePath, palace);
+    process.stdout.write(formatPruneResult(r));
+    return 0;
+  }
+  if (config.mind_palace?.prune_tag) {
+    const r = pruneTag(palace, config.mind_palace.prune_tag, config.mind_palace.prune_dry_run ?? false);
+    if (!r.dry_run) savePalace(palacePath, palace);
+    process.stdout.write(formatPruneResult(r));
+    return 0;
+  }
+  if (config.mind_palace?.prune_all) {
+    const r = pruneAll(palace, config.mind_palace.prune_confirm ?? false, config.mind_palace.prune_dry_run ?? false);
+    if (!r.dry_run) savePalace(palacePath, palace);
+    process.stdout.write(formatPruneResult(r));
+    return 0;
+  }
+  // Auto-prune expired stashes (runs silently on every mp-list, mp-get, etc.)
+  const expired = pruneExpired(palace, config.mind_palace?.prune_dry_run ?? false);
+  if (expired.removed > 0 && !expired.dry_run) savePalace(palacePath, palace);
 
   if (config.mind_palace?.list) {
     const allStashes = listStashes(palace, config.mind_palace.list.tags);
@@ -254,7 +288,7 @@ async function main(): Promise<number> {
       },
       [...resultSources],
       stashSpec.tags,
-      { replace: stashSpec.replace, locations: config.mp_stash_locations },
+      { replace: stashSpec.replace, locations: config.mp_stash_locations, ttl: config.mind_palace?.ttl },
     );
     savePalace(palacePath, palace);
     stashedAction = action;
@@ -276,7 +310,15 @@ async function main(): Promise<number> {
   return budgetedNodes.length === 0 ? 1 : 0;
 }
 
-/** Resolve SourceInputs to concrete (source, content) pairs. */
+/** Format a prune result for the LLM. */
+function formatPruneResult(r: { removed: number; names: string[]; dry_run: boolean }): string {
+  const tag = r.dry_run ? " (DRY RUN — nothing was deleted)" : "";
+  if (r.removed === 0) {
+    return `<mdg prune result removed=0>No stashes matched the prune criteria.${tag}</mdg prune>\n`;
+  }
+  const names = r.names.map((n) => `  - ${n}`).join("\n");
+  return `<mdg prune result removed=${r.removed} dry_run=${r.dry_run}>\nRemoved stashes (${r.removed}):\n${names}\n${tag}\n</mdg prune>\n`;
+}
 async function resolveInputs(
   inputs: ResolvedConfig["inputs"],
   stdinContent?: string | null,

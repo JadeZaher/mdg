@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -756,6 +756,78 @@ function main() {
     ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: palacePath } });
     const json = JSON.parse(r.stdout ?? "{}");
     assert(json.total_nodes >= 1, "intersect finds shared auth.ts matches");
+  }
+
+  // Test 47: --mp-list shows relative timestamps.
+  process.stdout.write("\nTest 47: --mp-list shows relative timestamps\n");
+  {
+    const r = runMdgPalace(["--mp-list", "--no-color"]);
+    assert(/(just now|s ago|m ago)/.test(r.stdout),
+      "shows relative time (e.g. 'just now', '30s ago', '2m ago')");
+  }
+
+  // Test 48: --mp-ttl stores an expiry timestamp.
+  process.stdout.write("\nTest 48: --mp-ttl stores an expiry timestamp\n");
+  {
+    const r = spawnSync("node", [cliPath, "TODO", "--in", join(fixtures, "auth.ts"),
+      "--mp-stash", "ttl-test", "TTL stash", "--mp-ttl", "2h",
+      "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: palacePath } });
+    assert((r.status ?? -1) === 0, `exit code 0 (got ${r.status})`);
+    const palace = JSON.parse(readFileSync(palacePath, "utf8"));
+    assert(palace.stashes["ttl-test"].expires_at !== null, "expires_at is set");
+  }
+
+  // Test 49: --mp-prune-older-than removes old stashes.
+  process.stdout.write("\nTest 49: --mp-prune-older-than removes old stashes\n");
+  {
+    const r = spawnSync("node", [cliPath, "--mp-prune-older-than", "1ms",
+      "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: palacePath } });
+    assert((r.status ?? -1) === 0, `exit code 0 (got ${r.status})`);
+    assert(/removed=/.test(r.stdout), "shows prune result");
+  }
+
+  // Test 50: --mp-prune-dry-run does not delete.
+  process.stdout.write("\nTest 50: --mp-prune-dry-run does not delete\n");
+  {
+    const r = spawnSync("node", [cliPath, "--mp-prune-older-than", "1ms",
+      "--mp-prune-dry-run", "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: palacePath } });
+    assert(/DRY RUN/.test(r.stdout ?? ""), "shows dry run warning");
+  }
+
+  // Test 51: --mp-prune-keep keeps N most recent.
+  process.stdout.write("\nTest 51: --mp-prune-keep keeps N most recent\n");
+  {
+    const p2 = join(fixtures, "keep-palace.json");
+    for (let i = 0; i < 5; i++) {
+      spawnSync("node", [cliPath, "TODO", "--in", join(fixtures, "auth.ts"),
+        "--mp-stash", `k${i}`, `stash ${i}`, "--no-color",
+      ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: p2 } });
+    }
+    spawnSync("node", [cliPath, "--mp-prune-keep", "2", "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: p2 } });
+    const palace = JSON.parse(readFileSync(p2, "utf8"));
+    const count = Object.keys(palace.stashes).length;
+    assert(count === 2, `kept 2 stashes (got ${count})`);
+  }
+
+  // Test 52: --mp-prune-tag removes tagged stashes.
+  process.stdout.write("\nTest 52: --mp-prune-tag removes tagged stashes\n");
+  {
+    const p3 = join(fixtures, "tag-palace.json");
+    spawnSync("node", [cliPath, "TODO", "--in", join(fixtures, "auth.ts"),
+      "--mp-stash", "tagged", "tagged", "--mp-tag", "temp", "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: p3 } });
+    spawnSync("node", [cliPath, "TODO", "--in", join(fixtures, "auth.ts"),
+      "--mp-stash", "untagged", "untagged", "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: p3 } });
+    spawnSync("node", [cliPath, "--mp-prune-tag", "temp", "--no-color",
+    ], { encoding: "utf8", env: { ...process.env, MDG_MIND_PALACE: p3 } });
+    const palace = JSON.parse(readFileSync(p3, "utf8"));
+    assert(!palace.stashes["tagged"], "tagged stash removed");
+    assert(palace.stashes["untagged"], "untagged stash remains");
   }
 
   // Cleanup.

@@ -137,6 +137,20 @@ export interface MindPalaceOps {
   except?: { base: string; exclude: string[] };
   /** --mp-intersect: files in all of the given stashes. */
   intersect?: string[];
+  /** --mp-ttl: auto-expiry duration for stashed results. */
+  ttl?: string;
+  /** --mp-prune-older-than: prune stashes older than this duration. */
+  prune_older_than?: string;
+  /** --mp-prune-keep: keep only N most recent stashes. */
+  prune_keep?: number;
+  /** --mp-prune-tag: prune all stashes with this tag. */
+  prune_tag?: string;
+  /** --mp-prune-all: prune everything (requires --mp-prune-confirm). */
+  prune_all?: boolean;
+  /** --mp-prune-confirm: required for destructive prune ops. */
+  prune_confirm?: boolean;
+  /** --mp-prune-dry-run: show what would be pruned without deleting. */
+  prune_dry_run?: boolean;
 }
 
 /** A source input as specified on the command line, pre-resolution. */

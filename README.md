@@ -44,12 +44,15 @@ snippet came from.
 Requires [Node 20+](https://nodejs.org) and [ripgrep](https://github.com/BurntSushi/ripgrep).
 
 ```bash
-git clone <this-repo> mdg
-cd mdg
-npm install
-npm run build
-npm link   # makes `mdg` available globally
+npm install -g mdg-cli
+# or from source:
+git clone https://github.com/JadeZaher/mdg.git
+cd mdg && npm install && npm run build && npm link
 ```
+
+For Claude / Gemini / coding agents: load `skills/mdg-context/SKILL.md`
+into your system prompt or tool descriptions. It provides a decision tree
+for effort levels, mind palace patterns, pagination, and error recovery.
 
 Verify:
 
@@ -226,6 +229,29 @@ mdg --mp-drop auth-issues
 The mind palace is **persistent** across `mdg` invocations within the
 same project (the JSON file lives on disk) but **logical** — a fresh
 palace can be created instantly by pointing `--mp-path` elsewhere.
+
+### Pruning & TTL
+
+The palace can grow unbounded. mdg provides several ways to prune:
+
+| Prune operation | CLI flag |
+| :--- | :--- |
+| By age | `--mp-prune-older-than 7d` — stashes not updated in 7 days |
+| By count | `--mp-prune-keep 10` — keep only the 10 most recently updated |
+| By tag | `--mp-prune-tag temp` — remove all stashes tagged `temp` |
+| All | `--mp-prune-all --mp-prune-confirm` — clear entire palace |
+| Expired TTL | Auto-pruned on every `--mp-list` / `--mp-get` |
+
+`--mp-prune-dry-run` shows what WOULD be pruned without deleting.
+
+TTL stashes auto-expire:
+
+```bash
+mdg "debug_stmt" --in src/ --mp-stash temp-findings "Temp" \
+  --mp-ttl 2h --mp-tag temp
+```
+
+Relative timestamps are shown in all listings (`just now`, `3m ago`, `2d ago`).
 
 ## Pagination
 

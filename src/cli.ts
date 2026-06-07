@@ -57,6 +57,15 @@ export interface RawArgs {
   mpExceptNames: string[];
   mpIntersect: string[];
   mpPath?: string;
+  // Pruning.
+  mpPruneOlderThan?: string;
+  mpPruneKeep?: number;
+  mpPruneTag?: string;
+  mpPruneAll: boolean;
+  mpPruneConfirm: boolean;
+  mpPruneDryRun: boolean;
+  // TTL.
+  mpTtl?: string;
   // Pagination + discovery.
   page?: number;
   pageSize?: number;
@@ -156,6 +165,20 @@ MIND PALACE (the LLM's instantiable short-term memory)
                                  or the closest one walking up from
                                  CWD). Use this for isolated sessions.
 
+PRUNING & TTL (keep the palace from growing unbounded)
+      --mp-ttl <duration>        Auto-expiry for this stash (e.g. 2h,
+                                 7d, 30m). The stash is marked with
+                                 expires_at; expired stashes can be
+                                 cleaned with --mp-prune-expired.
+      --mp-prune-older-than <d>  Remove stashes older than duration.
+      --mp-prune-keep <n>        Keep only the n most recent stashes.
+      --mp-prune-tag <tag>       Remove all stashes with a given tag.
+      --mp-prune-expired         Remove all expired stashes (those
+                                 whose --mp-ttl has elapsed).
+      --mp-prune-all             Remove all stashes.
+      --mp-prune-dry-run         Show what would be removed.
+      --mp-prune-confirm         Required for --mp-prune-all.
+
 EXAMPLES
   # Find TODOs in src/, with 500 tokens of context, up to 20 nodes
   mdg "TODO" --in src/ --max-nodes 20
@@ -240,6 +263,9 @@ export function parseArgs(argv: string[]): RawArgs {
     mpCompose: [],
     mpExceptNames: [],
     mpIntersect: [],
+    mpPruneAll: false,
+    mpPruneConfirm: false,
+    mpPruneDryRun: false,
     all: false,
     ls: false,
     mpStashLocations: false,
@@ -382,6 +408,15 @@ export function parseArgs(argv: string[]): RawArgs {
       continue;
     }
     if (a === "--mp-path") { args.mpPath = requireValue(a, argv, ++i); i++; continue; }
+    if (a === "--mp-ttl") { args.mpTtl = requireValue(a, argv, ++i); i++; continue; }
+
+    // Pruning.
+    if (a === "--mp-prune-older-than") { args.mpPruneOlderThan = requireValue(a, argv, ++i); i++; continue; }
+    if (a === "--mp-prune-keep") { args.mpPruneKeep = parseInt(requireValue(a, argv, ++i), 10); i++; continue; }
+    if (a === "--mp-prune-tag") { args.mpPruneTag = requireValue(a, argv, ++i); i++; continue; }
+    if (a === "--mp-prune-all") { args.mpPruneAll = true; i++; continue; }
+    if (a === "--mp-prune-confirm") { args.mpPruneConfirm = true; i++; continue; }
+    if (a === "--mp-prune-dry-run") { args.mpPruneDryRun = true; i++; continue; }
 
     // Pagination.
     if (a === "--page") { args.page = parseInt(requireValue(a, argv, ++i), 10); i++; continue; }
@@ -492,9 +527,16 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
   if (
     raw.mpStashName || raw.mpList || raw.mpGet || raw.mpDrop ||
     raw.mpFrom || (raw.mpCompose && raw.mpCompose.length > 0) ||
-    raw.mpExcept || (raw.mpIntersect && raw.mpIntersect.length > 0) || raw.mpPath
+    raw.mpExcept || (raw.mpIntersect && raw.mpIntersect.length > 0) ||
+    raw.mpPruneOlderThan || raw.mpPruneKeep !== undefined || raw.mpPruneTag ||
+    raw.mpPruneAll || raw.mpTtl || raw.mpPath
   ) {
-    mind_palace = { path: raw.mpPath };
+    mind_palace = {
+      path: raw.mpPath,
+      prune_all: raw.mpPruneAll,
+      prune_confirm: raw.mpPruneConfirm,
+      prune_dry_run: raw.mpPruneDryRun,
+    };
     if (raw.mpStashName) {
       mind_palace.stash = {
         name: raw.mpStashName,
@@ -514,6 +556,14 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
     if (raw.mpIntersect && raw.mpIntersect.length > 0) {
       mind_palace.intersect = raw.mpIntersect;
     }
+    if (raw.mpTtl) mind_palace.ttl = raw.mpTtl;
+    // Pruning.
+    if (raw.mpPruneOlderThan) mind_palace.prune_older_than = raw.mpPruneOlderThan;
+    if (raw.mpPruneKeep !== undefined) mind_palace.prune_keep = raw.mpPruneKeep;
+    if (raw.mpPruneTag) mind_palace.prune_tag = raw.mpPruneTag;
+    if (raw.mpPruneAll) mind_palace.prune_all = true;
+    mind_palace.prune_confirm = raw.mpPruneConfirm;
+    mind_palace.prune_dry_run = raw.mpPruneDryRun;
   }
 
   return {

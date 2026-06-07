@@ -36,6 +36,8 @@ export interface Stash {
   tags: string[];
   created_at: string;
   updated_at: string;
+  /** ISO timestamp when this stash auto-expires, or null. */
+  expires_at: string | null;
   search: {
     pattern: string;
     effort: string;
@@ -176,10 +178,11 @@ export function addStash(
   meta: Stash["search"],
   sources: string[],
   tags: string[] = [],
-  options: { replace?: boolean; locations?: boolean } = {},
+  options: { replace?: boolean; locations?: boolean; ttl?: string } = {},
 ): { stash: Stash; action: "created" | "replaced" | "merged" } {
   const now = new Date().toISOString();
   const existing = palace.stashes[name];
+  const expiresAt = options.ttl ? expiryFromNow(options.ttl) : null;
   const newNodes = options.locations
     ? stashNodesLocations(nodes)
     : stashNodes(nodes);
@@ -191,6 +194,7 @@ export function addStash(
       tags: [...tags],
       created_at: now,
       updated_at: now,
+      expires_at: expiresAt,
       search: meta,
       sources: dedup(sources),
       nodes: newNodes,
@@ -203,6 +207,7 @@ export function addStash(
     existing.note = note;
     existing.tags = [...tags];
     existing.updated_at = now;
+    existing.expires_at = expiresAt;
     existing.search = meta;
     existing.sources = dedup(sources);
     existing.nodes = newNodes;
@@ -225,6 +230,7 @@ export function addStash(
     existing.tags = [...tagSet];
   }
   if (note) existing.note = note; // overwrite note on merge
+  if (expiresAt) existing.expires_at = expiresAt;
   existing.updated_at = now;
   return { stash: existing, action: "merged" };
 }
@@ -342,4 +348,117 @@ export function stashNodesLocations(nodes: Node[]): StashedNode[] {
     context_after: [],
     tokens: 0,
   }));
+}
+
+// ─── Timestamp utilities ─────────────────────────────────────────────
+
+/** Parse a human-readable duration into milliseconds.
+ *  Accepts: "30s", "10m", "2h", "7d", "14d", or bare number (ms). */
+export function parseDuration(s: string): number {
+  const m = s.trim().match(/^([\d.]+)\s*(s|sec|m|min|h|hr|d|day|ms)?$/i);
+  if (!m) throw new Error(`Invalid duration: ${s}. Use e.g. 30s, 10m, 2h, 7d.`);
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || "ms").toLowerCase();
+  switch (unit) {
+    case "s": case "sec":   return n * 1000;
+    case "m": case "min":   return n * 60 * 1000;
+    case "h": case "hr":    return n * 3600 * 1000;
+    case "d": case "day":   return n * 86400 * 1000;
+    default:                return n; // raw ms
+  }
+}
+
+/** Format an ISO timestamp as a relative time string for display. */
+export function formatRelativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "just now";
+  const s = Math.floor(ms / 1000);
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+/** Compute an expiry timestamp from now + duration. */
+export function expiryFromNow(duration: string): string {
+  return new Date(Date.now() + parseDuration(duration)).toISOString();
+}
+
+// ─── Pruning operations ──────────────────────────────────────────────
+
+export interface PruneResult {
+  removed: number;
+  names: string[];
+  dry_run: boolean;
+}
+
+/** Remove stashes whose updated_at is older than `duration`. */
+export function pruneOlderThan(
+  palace: Palace,
+  duration: string,
+  dryRun = false,
+): PruneResult {
+  const cutoff = Date.now() - parseDuration(duration);
+  const names: string[] = [];
+  for (const [name, stash] of Object.entries(palace.stashes)) {
+    if (new Date(stash.updated_at).getTime() < cutoff) {
+      names.push(name);
+    }
+  }
+  if (!dryRun) for (const n of names) delete palace.stashes[n];
+  return { removed: names.length, names, dry_run: dryRun };
+}
+
+/** Remove stashes whose expires_at is in the past. */
+export function pruneExpired(palace: Palace, dryRun = false): PruneResult {
+  const now = Date.now();
+  const names: string[] = [];
+  for (const [name, stash] of Object.entries(palace.stashes)) {
+    if (stash.expires_at && new Date(stash.expires_at).getTime() < now) {
+      names.push(name);
+    }
+  }
+  if (!dryRun) for (const n of names) delete palace.stashes[n];
+  return { removed: names.length, names, dry_run: dryRun };
+}
+
+/** Keep the N most recently updated stashes, remove the rest. */
+export function pruneKeep(palace: Palace, n: number, dryRun = false): PruneResult {
+  const sorted = Object.values(palace.stashes).sort(
+    (a, b) => b.updated_at.localeCompare(a.updated_at),
+  );
+  const toRemove = sorted.slice(n);
+  const names = toRemove.map((s) => s.name);
+  if (!dryRun) for (const n of names) delete palace.stashes[n];
+  return { removed: names.length, names, dry_run: dryRun };
+}
+
+/** Remove all stashes with the given tag. */
+export function pruneTag(palace: Palace, tag: string, dryRun = false): PruneResult {
+  const names: string[] = [];
+  for (const [name, stash] of Object.entries(palace.stashes)) {
+    if (stash.tags.includes(tag)) {
+      names.push(name);
+    }
+  }
+  if (!dryRun) for (const n of names) delete palace.stashes[n];
+  return { removed: names.length, names, dry_run: dryRun };
+}
+
+/** Remove all stashes. Requires explicit confirmation. */
+export function pruneAll(palace: Palace, confirmed: boolean, dryRun = false): PruneResult {
+  const names = Object.keys(palace.stashes);
+  if (!confirmed) {
+    throw new Error(
+      `This would remove ${names.length} stashes. ` +
+      `Pass --mp-prune-confirm to actually delete them. ` +
+      `Use --mp-prune-dry-run to see what would be removed.`,
+    );
+  }
+  if (!dryRun) palace.stashes = {};
+  return { removed: names.length, names, dry_run: dryRun };
 }

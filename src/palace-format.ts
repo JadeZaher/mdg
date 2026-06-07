@@ -15,6 +15,7 @@
 import type { Stash } from "./mind-palace.js";
 import type { PaginationMeta } from "./pagination.js";
 import { paginationAnnotation, paginationTextNote } from "./pagination.js";
+import { formatRelativeTime } from "./mind-palace.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -57,7 +58,11 @@ export function formatPalaceList(
     out.push(`pattern: ${c(useColor, FG_YELLOW, s.search.pattern)}`);
     out.push(`effort:  ${s.search.effort}`);
     out.push(`nodes:   ${s.nodes.length}  |  sources: ${s.sources.length}`);
-    out.push(`updated: ${s.updated_at}`);
+    const relTime = formatRelativeTime(s.updated_at);
+    out.push(`updated: ${relTime} (${s.updated_at})`);
+    if (s.expires_at) {
+      out.push(`expires: ${formatRelativeTime(s.expires_at)}`);
+    }
   }
   if (pagination) {
     out.push("");
@@ -85,7 +90,10 @@ export function formatPalaceGet(
     out.push(`tags:     ${stash.tags.join(", ")}`);
   }
   out.push(`created:  ${stash.created_at}`);
-  out.push(`updated:  ${stash.updated_at}`);
+  out.push(`updated:  ${formatRelativeTime(stash.updated_at)} (${stash.updated_at})`);
+  if (stash.expires_at) {
+    out.push(`expires:  ${formatRelativeTime(stash.expires_at)} (${stash.expires_at})`);
+  }
   out.push(`search:   pattern=${c(useColor, FG_YELLOW, stash.search.pattern)}  effort=${stash.search.effort}`);
   out.push(`nodes:    ${stash.nodes.length}  |  sources: ${stash.sources.length}`);
   out.push("");
