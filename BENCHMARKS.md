@@ -6,11 +6,44 @@ Automated summary of the most recent `bench/results/*.json` files. Regenerate wi
 npm run bench && npm run bench:agg
 ```
 
-_Generated 2026-06-07T22:45:57.158Z._
+_Generated 2026-06-07T22:53:37.700Z._
 
 ## compaction — memory-system primitive head-to-head
 
-_No results found. Run `npm run bench:compaction` (requires `ANTHROPIC_API_KEY` for full run; no-LLM arms only without)._
+_Tasks: 3. Mega-corpus: 254 files across 4 projects. Run: 2026-06-07T22:52:00.683Z_
+
+The honest test of mdg as a memory primitive: given a topic + token budget, can it assemble a compaction a downstream LLM can answer Q&A from? Arms compared:
+
+- **truncation** — no-LLM baseline. Most-recent files until budget.
+- **mdg-scan** — no-LLM mdg call: `scan + sort recent + window-curve log + max-tokens budget`.
+- **summarization** — LLM baseline: rg-retrieve + single-pass LLM compaction.
+- **mdg-agent** — LLM with mdg tools, headline arm.
+
+### Per-arm summary
+
+| arm | pass rate | mean comp tokens | mean in tokens | mean density (pass/k) | mean ms |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| truncation | 22% | 2003 | 0 | 0.11 | 6 |
+| mdg-scan | 67% | 2752 | 0 | 0.49 | 993 |
+| summarization | 33% | 573 | 20482 | 0.47 | 12689 |
+| mdg-agent | 11% | 15 | 68726 | 7.41 | 52168 |
+
+### Per-task breakdown
+
+| task | arm | pass | comp tok | in tok |
+| :--- | :--- | ---: | ---: | ---: |
+| authentication patterns across projects | truncation | 67% | 2003 | 0 |
+| authentication patterns across projects | mdg-scan | 100% | 5321 | 0 |
+| authentication patterns across projects | summarization | 100% | 711 | 43419 |
+| authentication patterns across projects | mdg-agent | 33% | 15 | 58401 |
+| asset pipeline / content addressing | truncation | 0% | 2003 | 0 |
+| asset pipeline / content addressing | mdg-scan | 67% | 2609 | 0 |
+| asset pipeline / content addressing | summarization | 0% | 810 | 16185 |
+| asset pipeline / content addressing | mdg-agent | 0% | 15 | 90702 |
+| rendering stack and camera setup | truncation | 0% | 2003 | 0 |
+| rendering stack and camera setup | mdg-scan | 33% | 325 | 0 |
+| rendering stack and camera setup | summarization | 0% | 198 | 1841 |
+| rendering stack and camera setup | mdg-agent | 0% | 15 | 57076 |
 
 ## macro — agent task lift (code + specs corpus)
 
@@ -53,15 +86,15 @@ Two arms of the same agent: **control** (read/grep/write/bash) vs **treatment** 
 
 _Skipped: ANTHROPIC_API_KEY not set_
 
-## conversational — Claude project memory archive
+## memory-corpus literal recall (oasis-sleek conductor tracks)
 
-_Corpus: 11366 lines, 570 KB. Run: 2026-06-07T22:23:37.193Z_
+_Corpus: 11366 lines, 570 KB. Run: 2026-06-07T22:47:23.973Z_
 
 | substrate | recall | precision | F1 | tokens | ms |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| mdg | 100% | 100% | 100% | 1528 | 1035 |
-| ripgrep | 100% | 100% | 100% | 1197 | 21 |
-| powershell | 100% | 94% | 96% | 2505 | 326 |
+| mdg | 100% | 100% | 100% | 1528 | 1074 |
+| ripgrep | 100% | 100% | 100% | 1197 | 24 |
+| powershell | 100% | 94% | 96% | 2505 | 361 |
 | embed | 46% | 46% | 46% | 18297 | 4 |
 
 ### conversational savings vs ripgrep baseline
@@ -70,13 +103,13 @@ ripgrep at the same recall is the cheapest line-oriented baseline. The savings c
 
 | substrate | recall vs rg | precision vs rg | token cost vs rg | latency vs rg |
 | :--- | ---: | ---: | ---: | ---: |
-| mdg | +0% | +0% | +28% | +4752% |
-| powershell | +0% | −6% | +109% | +1428% |
-| embed | −54% | −54% | +1429% | −81% |
+| mdg | +0% | +0% | +28% | +4470% |
+| powershell | +0% | −6% | +109% | +1436% |
+| embed | −54% | −54% | +1429% | −84% |
 
 ## memory-corpus (section-chunked embeddings)
 
-_Run: 2026-06-07T21:40:46.208Z. Same queries and corpus as the memory-corpus tier, but the embedding index is built from per-section chunks (split on `## ` / `### ` markdown headings) rather than whole files._
+_Run: 2026-06-07T22:47:03.838Z. Same queries and corpus as the memory-corpus tier, but the embedding index is built from per-section chunks (split on `## ` / `### ` markdown headings) rather than whole files._
 
 Chunker produced 1005 section-level chunks from 11366 corpus lines.
 
@@ -90,34 +123,34 @@ Section-level chunking moved recall by **+5%** (46% → 51%) at **94% fewer toke
 
 ## semantic recall — paraphrased queries
 
-_Run: 2026-06-07T21:40:20.037Z. Queries are PARAPHRASED — the literal pattern doesn't appear verbatim in the corpus. This favors embeddings on construction; regex substrates get only the single most-distinctive literal keyword._
+_Run: 2026-06-07T22:46:43.220Z. Queries are PARAPHRASED — the literal pattern doesn't appear verbatim in the corpus. This favors embeddings on construction; regex substrates get only the single most-distinctive literal keyword._
 
 | substrate | recall | precision | F1 | tokens | ms |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| mdg | 92% | 100% | 95% | 12844 | 1824 |
-| ripgrep | 100% | 100% | 100% | 1236 | 33 |
-| powershell | 100% | 92% | 95% | 2792 | 569 |
+| mdg | 92% | 100% | 95% | 12844 | 925 |
+| ripgrep | 100% | 100% | 100% | 1236 | 21 |
+| powershell | 100% | 92% | 95% | 2792 | 290 |
 | embed | 50% | 50% | 50% | 17243 | 0 |
 
 ## meso — recall vs budget (mdg)
 
-_Run: 2026-06-07T19:41:57.052Z_
+_Run: 2026-06-07T22:46:29.982Z_
 
 | effort | recall | precision | F1 | tokens | ms |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| quick | 100% | 79% | 85% | 257 | 256 |
-| normal | 100% | 79% | 85% | 257 | 229 |
-| deep | 100% | 79% | 85% | 257 | 217 |
+| quick | 100% | 79% | 85% | 257 | 189 |
+| normal | 100% | 79% | 85% | 257 | 191 |
+| deep | 100% | 79% | 85% | 257 | 179 |
 
 ## meso — embedding baseline (vector cosine top-k)
 
-_Run: 2026-06-07T19:16:07.166Z_
+_Run: 2026-06-07T22:46:31.458Z_
 
 | k | recall | precision | F1 | tokens | ms |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 3 | 54% | 27% | 33% | 109 | 3 |
-| 5 | 92% | 36% | 48% | 218 | 4 |
-| 10 | 100% | 28% | 40% | 320 | 3 |
+| 5 | 92% | 36% | 48% | 218 | 3 |
+| 10 | 100% | 28% | 40% | 320 | 2 |
 
 ### meso head-to-head: mdg (quick) vs embedding (k=5)
 
@@ -126,12 +159,12 @@ _Run: 2026-06-07T19:16:07.166Z_
 | recall    | 100% | 92% | — |
 | precision | 79% | 36% | — |
 | tokens    | 257 | 218 | +18% |
-| ms        | 256 | 4 | +6637% |
+| ms        | 189 | 3 | +6643% |
 
 ## What the numbers mean
 
 - **mdg vs ripgrep on the memory-system corpus (markdown specs + JSON metadata, conductor tracks)**: mdg costs **1.3× more tokens** than rg at 0% more recall and 0% more precision. mdg's value here is the per-match windowed context + structured node metadata + token budget knobs that rg lacks — useful when an agent will *consume* the result, not just list lines.
-- **PowerShell vs ripgrep**: matches rg on recall, **15× slower**. A Windows user without rg pays a real latency tax (PowerShell ~326 ms vs rg ~21 ms).
+- **PowerShell vs ripgrep**: matches rg on recall, **15× slower**. A Windows user without rg pays a real latency tax (PowerShell ~361 ms vs rg ~24 ms).
 - **Embeddings vs regex (literal pattern queries) on the memory corpus**: per-file embeddings got 46% recall. Section-level chunking (`embed-chunked`) does meaningfully better at a fraction of the token cost — see the chunked section above. For *semantic* recall (paraphrased prompts), see the semantic section below.
 - **Meso (small synthetic code corpus)**: mdg quick → 100% recall, 257 tokens. Embedding k=5 → 92% recall, 218 tokens. mdg wins on recall by 8%, costs 18% tokens. **Caveat**: the meso corpus is too small (8 files) to be load-bearing — expanding fixtures is in the backlog.
 
@@ -144,7 +177,7 @@ Auto-generated from the latest run.
 
 **Loses:**
 - Higher token cost than rg (1528 vs 1197). mdg returns windowed nodes (file + match line + sized context); rg returns raw lines. The mdg cost is the windowing budget — knobs let an agent trade context size for tokens, which rg cannot.
-- Cold-start latency vs rg (1035ms vs 21ms, ~49× slower). Node startup + JSON formatter overhead matters in tight agent loops; MCP server warm-call is closer to rg.
+- Cold-start latency vs rg (1074ms vs 24ms, ~46× slower). Node startup + JSON formatter overhead matters in tight agent loops; MCP server warm-call is closer to rg.
 - One semantic anomaly in `--mp-except` (micro: 1/17). Logged for investigation.
 
 ## What's missing (the comparisons this bench can't make yet)

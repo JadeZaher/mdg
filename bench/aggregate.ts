@@ -223,8 +223,8 @@ function mesoComparison(meso: MesoFile | null, me: MesoEmbedFile | null): string
 }
 
 function convSection(conv: ConvFile | null): string {
-  if (!conv) return "## conversational — Claude project memory archive\n\n_No results found. Run `npx tsx bench/conversational/run.ts`._\n";
-  const lines = ["## conversational — Claude project memory archive", "",
+  if (!conv) return "## memory-corpus literal recall (oasis-sleek conductor tracks)\n\n_No results found. Run `npx tsx bench/conversational/run.ts`._\n";
+  const lines = ["## memory-corpus literal recall (oasis-sleek conductor tracks)", "",
     `_Corpus: ${conv.corpus_lines} lines, ${(conv.corpus_bytes / 1024).toFixed(0)} KB. Run: ${conv.generated_at}_`, ""];
   lines.push("| substrate | recall | precision | F1 | tokens | ms |");
   lines.push("| :--- | ---: | ---: | ---: | ---: | ---: |");
