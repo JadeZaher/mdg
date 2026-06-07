@@ -39,10 +39,12 @@ automatically once the `mdg` MCP server is configured.
 
 | Situation | Tool |
 | :--- | :--- |
-| "Where is X referenced?" | `mdg_search` |
-| "Need context around a match" | `mdg_search` (`before`/`after`) |
-| "Quick scan — is this term here at all?" | `mdg_search` (`effort: "quick"`) |
-| "Deep context for a final answer" | `mdg_search` (`effort: "deep"`) |
+| "Browse my recent memory — what just changed about X?" | `mdg_search` (`effort: "scan", sort: "recent", clip_chars: 30`) |
+| "Where is X referenced?" | `mdg_search` (`effort: "scan", clip_chars: 30`) — cheapest hit list |
+| "Need context around a match" | `mdg_search` (`effort: "quick"`) — small windows around top 10 hits |
+| "Deep context for one targeted answer" | `mdg_search` (`effort: "deep"`) — 100 nodes × 2k tokens each |
+| "User typed a typo — find anyway" | `mdg_search` (`fuzzy: true`) — edit distance ≤ 2 |
+| "Compact a topic into a token budget" | `mdg_search` (`effort: "scan", clip_chars: 30, max_tokens: N`) |
 | "I'll need these hits again later" | `mdg_stash` |
 | "Search only files I previously stashed" | `mdg_search` (`from` or `compose`) |
 | "What stashes do I have?" | `mdg_list_stashes` |
@@ -50,45 +52,85 @@ automatically once the `mdg` MCP server is configured.
 | "Just read one file" | use the host's read tool — mdg is for *searching* |
 | "Search a URL or command output" | `mdg_search` (`url` or `cmd`) — see `references/sources.md` |
 
-## Effort presets
+## Effort presets and shape knobs
 
 | effort | before | after | max_nodes | use case |
 | :--- | ---: | ---: | ---: | :--- |
-| **scan**  |  20  |  20 |   uncapped | **Index mode.** Every hit gets a tiny disambiguating window. Recall AND precision match rg regardless of hit count; tokens scale O(hits). Combine with `--sort recent` for a time-ordered memory index. |
+| **scan**  |  20  |  20 |   uncapped | **Index mode.** Every hit gets a tiny disambiguating window. Recall AND precision match rg regardless of hit count; tokens scale O(hits). Combine with `clip_chars: 30` and `sort: "recent"` for the cheapest first-touch index. |
 | **quick** | 200 | 200 |     10 | **DEFAULT.** Small windows, small cap. First touch of a topic. |
-| normal | 500 | 500 |     30 | Bump to this when quick was ambiguous. |
+| normal | 500 | 500 |     30 | Bump when quick was ambiguous. |
 | deep   | 2000 | 2000 |   100 | Final answer grounding — for one targeted query you commit to. |
-| auto   |  500 |  500 |    30 | Reserved (future heuristic sizing). |
 
-### Recommended pattern: scan first, dig deeper on demand
+Shape knobs (mix with any effort):
 
-mdg is designed for "less is more on the first turn, with intelligent
-follow-up." Use it that way:
+| flag | what it does | when it wins |
+| :--- | :--- | :--- |
+| `clip_chars: N` | Sub-line snippet around the matched span (N chars each side, ellipsis-marked). Drops per-line context entirely. | **Memory-corpus literal recall**: scan + clip_chars=30 is 3.2× cheaper than ripgrep (377 vs 1197 tokens) at 100% recall + 100% precision on the same corpus. |
+| `fuzzy: true` | Trigram-union driver + Levenshtein post-filter (edit distance ≤ 2). Handles drop / insert / substitute / swap typos. | **Typo recovery**: 100% recall on typo'd input vs rg's 0%. 12× cheaper than per-file embeddings. |
+| `sort: "recent"` | Order returned nodes by source-file mtime, newest first. | **Time-ordered memory index**: combine with scan and pagination to browse "what just changed" first; dig deeper into history on demand. |
+| `window_curve: "log"` | Per-node window decays as `full / log2(rank+2)`. Rank 0 keeps full context; later ranks shrink. | **Recency-weighted context**: saves ~53% tokens vs flat windows while keeping the top hit's full context. Pairs with sort:recent. |
 
-1. **Start with `scan`** when you don't yet know what's relevant —
-   uncapped node count with a tiny 20+20 token window per hit gives
-   you the *index* of file:line hits across the whole search space
-   at ~60 tokens per hit. Recall and precision both match raw rg.
-2. **Add `--sort recent`** to surface the most-recently-edited files
-   first. The index becomes a *time-ordered memory*: paginate to dig
-   back in history; the first page is always "what just changed."
-3. **Stash the scan result** (`mdg_stash`) so subsequent searches
-   can scope to those files (`from: <stash-name>`).
-4. **Run small targeted `quick` or `normal` queries in parallel** on
-   the specific files you care about, instead of one huge `deep`
-   query across everything.
+### Recommended patterns (bench-driven)
 
-This trades token cost for round-trip — perfect for tool-loop agents
-that can run multiple tool calls per turn. It's much cheaper than
-"`deep` first, hope you got everything." On a memory-system corpus
-(specs + plans + JSON metadata), scan + sort=recent + pagination is
-the natural "browse my recent memory" primitive.
+**1. Cheapest first-touch index — "browse my memory"**
+
+```ts
+mdg_search({
+  pattern: "JWT Bearer",          // or any concept keyword
+  in: ["./conductor/tracks"],
+  effort: "scan",
+  clip_chars: 30,
+  sort: "recent",
+  page: 1,
+  page_size: 10
+})
+```
+
+What you get: file:line hits with a 30-char snippet on each side, sorted by recency, paginated. Empirically **3.2× cheaper than rg** (377 vs 1197 tokens) at 100/100 recall/precision on memory-system content. Skip to deeper modes only when this isn't enough.
+
+**2. Typo-tolerant search**
+
+```ts
+mdg_search({ pattern: "PrvderiContext", in: [...], fuzzy: true })
+```
+
+`fuzzy: true` catches all four common typo modes (drop / insert / substitute / swap). Use when the user's input is uncertain.
+
+**3. Scan → stash → drill-down across turns**
+
+```ts
+// Turn 1: scan + stash
+const scan = await mdg_search({ pattern: "...", effort: "scan", clip_chars: 30, sort: "recent" });
+await mdg_stash({ name: "topic-index", note: "...", tags: ["topic"] });
+
+// Turn 2+: drill into ONE file from the index
+await mdg_search({ pattern: "...", effort: "normal", from: "topic-index" });
+```
+
+The mind palace makes the index addressable across turns. Re-scoping to a stash is cheaper than re-searching the whole tree.
+
+**4. Compaction at zero LLM cost**
+
+```ts
+// Produces a topic-focused compaction in one tool call.
+mdg_search({
+  pattern: "auth|JWT|Bearer|ProviderContext",  // OR your topic keywords
+  in: ["..."],
+  effort: "scan",
+  clip_chars: 30,
+  sort: "recent",
+  window_curve: "log",
+  max_tokens: 2000               // hard cap the compaction size
+})
+```
+
+On the compaction bench, this single CLI call beats LLM-driven summarization (67% pass vs 33%) at **zero LLM input tokens**. Use when you'd otherwise spend a 50k-token summarization round-trip.
 
 ## The five MCP tools (signatures only)
 
 | Tool | Required params | Optional |
 | :--- | :--- | :--- |
-| `mdg_search` | `pattern` | `in[]`, `cmd`, `url`, `before`, `after`, `max_nodes`, `max_tokens`, `effort`, `strategy`, `from`, `compose[]`, `page`, `page_size`, `all` |
+| `mdg_search` | `pattern` | `in[]`, `cmd`, `url`, `before`, `after`, `max_nodes`, `max_tokens`, `effort` (scan/quick/normal/deep), `strategy`, `from`, `compose[]`, `page`, `page_size`, `all`, **`clip_chars`** (sub-line snippet N), **`fuzzy`** (typo-tolerant), **`sort`** ("recent"/"oldest"/"default"), **`window_curve`** ("flat"/"linear"/"log") |
 | `mdg_stash` | `name` | `note`, `tags[]`, `replace` |
 | `mdg_list_stashes` | — | `tag_filter[]`, `page`, `page_size` |
 | `mdg_get_stash` | `name` | `page`, `page_size` |
@@ -128,6 +170,22 @@ Same pattern for `mdg_list_stashes` and `mdg_get_stash`.
 | Unknown stash | Run `mdg_list_stashes` to discover. |
 | `pagination.has_next` | More data exists. Decide if current page is enough. |
 | `--mp-from` returns nothing | Stashed files may have moved or been deleted. Re-stash fresh. |
+
+## What the bench data says (informs the patterns above)
+
+Headline numbers from `BENCHMARKS.md` (oasis-sleek conductor tracks corpus — markdown specs + JSON metadata):
+
+| comparison | mdg config | result |
+| :--- | :--- | :--- |
+| Literal recall vs **ripgrep** | `scan + clip_chars: 30` | 100% / 100% / **377 tokens** vs rg's 1197 — **3.2× cheaper than rg** |
+| Typo recovery | `fuzzy: true` | 100% recall vs rg's 0%, 89% precision, ~1900 tokens. Embeddings get 45% at 23,610 tokens. |
+| Compaction at fixed budget | `scan + clip + max_tokens` (no LLM) | 67% pass beats LLM summarization (33%) at zero LLM cost |
+| Multi-turn convergence | treatment uses mdg + stash | 24% fewer input tokens, **half the tool calls and turns** vs control |
+| Mind palace set semantics | `compose` / `intersect` / `except` / graph | 17/17 micro assertions pass |
+
+Where mdg loses on the bench (worth knowing):
+- **Single-keyword lookups** where you only need a file:line list (T2 BLAKE3, T3 load_to_bevy in macro): rg is cheaper. Use `bash`/`grep` for one-word answers.
+- **Cold-start wall-clock**: ~200ms per CLI call. MCP server / programmatic import avoid this (the cost is paid once at boot).
 
 ## Read further (load on demand)
 

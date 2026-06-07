@@ -10,6 +10,27 @@ and you can cap the **number of nodes** and the **total token budget**
 independently. The depth of context is adjusted by `effort` rather than by
 blindly loading more text.
 
+Plus a persistent **mind palace** — named, addressable stashes of
+search results that compose, intersect, prune, and form a graph. mdg is
+how agents browse and trim long-term memory, not just how they grep.
+
+## Headline numbers vs alternatives
+
+Pulled from the in-repo benchmark suite (`bench/` + [`BENCHMARKS.md`](./BENCHMARKS.md)).
+
+| workload | mdg config | result vs alternatives |
+| :--- | :--- | :--- |
+| Literal recall on a markdown/JSON memory corpus | `--effort scan --clip 30` | 100% / 100% / **377 tokens** vs ripgrep's 1,197 — **3.2× cheaper than rg** |
+| Typo-tolerant search (drop / insert / swap / sub) | `--fuzzy` | **100%** recall vs ripgrep's 0%, ~12× cheaper than per-file embedding retrieval |
+| Topic compaction at fixed token budget | `--effort scan --clip 30 --max-tokens N` | 67% downstream-Q&A pass vs LLM summarization's 33% — at **zero LLM input tokens** |
+| Multi-turn agent convergence | `mdg_search` + `mdg_stash` | 24% fewer input tokens, **half the tool calls and turns** vs read+grep control |
+| Mind palace set semantics | `--mp-compose` / `--mp-intersect` / `--mp-except` | 17/17 micro assertions pass |
+
+See [`BENCHMARKS.md`](./BENCHMARKS.md) for the full scorecard across six
+tiers (micro, meso, conversational, semantic, typo, compaction, macro,
+multi-turn) and the raw cell-by-cell breakdowns. Where mdg loses (single-
+keyword greps, CLI cold start), the numbers are reported honestly.
+
 ## Command reference
 
 Every flag, grouped by category. The shape of every command is:
@@ -45,7 +66,11 @@ pure palace operations (`--mp-list`, `--mp-get`, `--mp-drop`, `--mp-link`,
 | `-n, --max-nodes <n>` | `--max-nodes 20` | Hard cap on nodes returned. Default: 30. |
 | `--max-tokens <n>` | `--max-tokens 8000` | Total token budget across all nodes. |
 | `--strategy fill\|deep` | `--strategy deep` | Spend `--max-tokens` on more nodes (`fill`) or deeper per node (`deep`). |
-| `-e, --effort <preset>` | `--effort quick` | Preset bundles: `quick` (200t/10n), `normal` (500t/30n), `deep` (2000t/100n), `auto`. |
+| `-e, --effort <preset>` | `--effort scan` | Bundles: **`scan`** (20t/uncapped, index mode), **`quick`** (200t/10n, **default**), `normal` (500t/30n), `deep` (2000t/100n). |
+| `--clip <N>` | `--clip 30` | **Sub-line snippet mode.** Drops line context; trims the match line to N chars on each side of the matched span (with ellipsis markers). Combine with `--effort scan` for the cheapest possible index. |
+| `--sort <mode>` | `--sort recent` | Order nodes by source file mtime: `recent` (newest first), `oldest`, `default` (rg's order). Pairs with `scan` for a time-ordered memory index. |
+| `--window-curve <mode>` | `--window-curve log` | Per-node window decays across ranks: `flat` (default), `linear` (full → ~10% at last rank), `log` (`full / log2(rank+2)`). Combine with `--sort recent` for "rich on what just changed, tight on older history." |
+| `--fuzzy` | `--fuzzy` | Typo-tolerant search. Trigram-union driver + Levenshtein post-filter (edit distance ≤ 2). Handles drop / insert / substitute / swap typos. Skipped when the pattern already has regex metacharacters. |
 
 ### Output
 
@@ -138,6 +163,19 @@ searches can use them as inputs.
 ### Common recipes (copy-paste)
 
 ```bash
+# Cheapest first-touch index — "browse my recent memory"
+# 3.2x cheaper than rg at 100/100 recall/precision on memory-system content.
+mdg "JWT|Bearer|ProviderContext" --in . \
+  --effort scan --clip 30 --sort recent --page 1 --page-size 10
+
+# Typo-tolerant search (catches drop/insert/substitute/swap, edit dist <= 2)
+mdg "PrvderiContext" --in . --fuzzy --effort scan --clip 30
+
+# Topic compaction at a hard token budget (zero LLM cost)
+mdg "auth|JWT|Bearer|ProviderContext" --in conductor/tracks \
+  --effort scan --clip 30 --sort recent --window-curve log \
+  --max-tokens 2000 --format llm > auth-compaction.md
+
 # Quick recon
 mdg "auth" --in . --effort quick --max-nodes 5
 
