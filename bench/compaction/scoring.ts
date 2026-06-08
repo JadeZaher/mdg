@@ -11,9 +11,13 @@
  */
 
 import { getClient } from "../macro/agent/client.js";
+import { getOpenRouterClient, DEFAULT_OPENROUTER_MODEL } from "../macro/agent/openrouter-client.js";
 import type { CompactionQA } from "./tasks.js";
 
-const SCORER_MODEL = process.env.MDG_BENCH_SCORER_MODEL ?? "claude-haiku-4-5-20251001";
+const PROVIDER = ((process.env.MDG_BENCH_PROVIDER ?? "anthropic").toLowerCase() === "openrouter") ? "openrouter" : "anthropic";
+const SCORER_MODEL =
+  process.env.MDG_BENCH_SCORER_MODEL ??
+  (PROVIDER === "openrouter" ? DEFAULT_OPENROUTER_MODEL : "claude-haiku-4-5-20251001");
 const INTER_CALL_DELAY_MS = 300;
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
@@ -73,36 +77,54 @@ function matchExpected(answer: string, expected: string[]): string | undefined {
 }
 
 export async function scoreCompaction(compaction: string, qas: CompactionQA[]): Promise<ScoringResult> {
-  const client = await getClient();
   const results: QAResult[] = [];
+  const useOpenRouter = PROVIDER === "openrouter";
+  const anthropic = useOpenRouter ? null : await getClient();
+  const openai = useOpenRouter ? await getOpenRouterClient() : null;
+
   for (const qa of qas) {
     try {
       if (INTER_CALL_DELAY_MS > 0) await sleep(INTER_CALL_DELAY_MS);
-      const resp = await withRetry(() => client.messages.create({
-        model: SCORER_MODEL,
-        system: SYS,
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content:
-              `CONTEXT:\n\n${compaction}\n\n---\n\nQUESTION: ${qa.question}\n\nAnswer based ONLY on the context above.`,
-          },
-        ],
-      }));
-      const answer = resp.content
-        .filter((b: { type: string }) => b.type === "text")
-        .map((b: { type: string; text?: string }) => b.text ?? "")
-        .join(" ")
-        .trim();
+      const userMsg = `CONTEXT:\n\n${compaction}\n\n---\n\nQUESTION: ${qa.question}\n\nAnswer based ONLY on the context above.`;
+
+      let answer = "";
+      let inTok = 0, outTok = 0;
+      if (useOpenRouter && openai) {
+        const resp = await withRetry(() => openai.chat.completions.create({
+          model: SCORER_MODEL,
+          max_tokens: 256,
+          messages: [
+            { role: "system", content: SYS },
+            { role: "user", content: userMsg },
+          ],
+        }));
+        answer = (resp.choices?.[0]?.message?.content ?? "").trim();
+        inTok = resp.usage?.prompt_tokens ?? 0;
+        outTok = resp.usage?.completion_tokens ?? 0;
+      } else if (anthropic) {
+        const resp = await withRetry(() => anthropic.messages.create({
+          model: SCORER_MODEL,
+          system: SYS,
+          max_tokens: 256,
+          messages: [{ role: "user", content: userMsg }],
+        }));
+        answer = resp.content
+          .filter((b: { type: string }) => b.type === "text")
+          .map((b: { type: string; text?: string }) => b.text ?? "")
+          .join(" ")
+          .trim();
+        inTok = resp.usage.input_tokens;
+        outTok = resp.usage.output_tokens;
+      }
+
       const matched = matchExpected(answer, qa.expected_phrases);
       results.push({
         question: qa.question,
         answer,
         passed: matched !== undefined,
         matched_phrase: matched,
-        input_tokens: resp.usage.input_tokens,
-        output_tokens: resp.usage.output_tokens,
+        input_tokens: inTok,
+        output_tokens: outTok,
       });
     } catch (err) {
       results.push({

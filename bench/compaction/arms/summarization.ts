@@ -13,10 +13,14 @@
 
 import { spawnSync } from "node:child_process";
 import { getClient } from "../../macro/agent/client.js";
+import { getOpenRouterClient, DEFAULT_OPENROUTER_MODEL } from "../../macro/agent/openrouter-client.js";
 import type { CompactionTask } from "../tasks.js";
 
+const PROVIDER = ((process.env.MDG_BENCH_PROVIDER ?? "anthropic").toLowerCase() === "openrouter") ? "openrouter" : "anthropic";
 const MAX_INPUT_CHARS = 200_000; // ~50k tokens worth of retrieved context
-const MODEL = process.env.MDG_BENCH_MODEL ?? "claude-haiku-4-5-20251001";
+const MODEL =
+  process.env.MDG_BENCH_MODEL ??
+  (PROVIDER === "openrouter" ? DEFAULT_OPENROUTER_MODEL : "claude-haiku-4-5-20251001");
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 function isRetryable(err: unknown): boolean {
@@ -68,7 +72,6 @@ export async function runSummarization(task: CompactionTask, corpusRoot: string)
     if (retrieved.length > MAX_INPUT_CHARS) {
       retrieved = retrieved.slice(0, MAX_INPUT_CHARS) + "\n[truncated]";
     }
-    const client = await getClient();
     const sys =
       "You produce concise memory compactions from retrieved code+spec excerpts. " +
       "Stay strictly within the requested token budget. Preserve concrete facts " +
@@ -79,22 +82,43 @@ export async function runSummarization(task: CompactionTask, corpusRoot: string)
       `BUDGET: ${task.budget_tokens} tokens (hard cap).\n\n` +
       `RETRIEVED CONTENT (file:line:text from ripgrep):\n\n${retrieved}\n\n` +
       `Produce the compaction now. Output ONLY the compaction text.`;
-    const resp = await withRetry(() => client.messages.create({
-      model: MODEL,
-      system: sys,
-      max_tokens: Math.min(8192, Math.ceil(task.budget_tokens * 1.2)),
-      messages: [{ role: "user", content: user }],
-    }));
-    const text = resp.content
-      .filter((b: { type: string }) => b.type === "text")
-      .map((b: { type: string; text?: string }) => b.text ?? "")
-      .join("\n");
+    const maxOut = Math.min(8192, Math.ceil(task.budget_tokens * 1.2));
+
+    let text = "", inTok = 0, outTok = 0;
+    if (PROVIDER === "openrouter") {
+      const openai = await getOpenRouterClient();
+      const resp = await withRetry(() => openai.chat.completions.create({
+        model: MODEL,
+        max_tokens: maxOut,
+        messages: [
+          { role: "system", content: sys },
+          { role: "user", content: user },
+        ],
+      }));
+      text = (resp.choices?.[0]?.message?.content ?? "").trim();
+      inTok = resp.usage?.prompt_tokens ?? 0;
+      outTok = resp.usage?.completion_tokens ?? 0;
+    } else {
+      const anthropic = await getClient();
+      const resp = await withRetry(() => anthropic.messages.create({
+        model: MODEL,
+        system: sys,
+        max_tokens: maxOut,
+        messages: [{ role: "user", content: user }],
+      }));
+      text = resp.content
+        .filter((b: { type: string }) => b.type === "text")
+        .map((b: { type: string; text?: string }) => b.text ?? "")
+        .join("\n");
+      inTok = resp.usage.input_tokens;
+      outTok = resp.usage.output_tokens;
+    }
     return {
       arm: "summarization",
       compaction: text,
       compaction_tokens: approxTokens(text),
-      input_tokens: resp.usage.input_tokens,
-      output_tokens: resp.usage.output_tokens,
+      input_tokens: inTok,
+      output_tokens: outTok,
       ms: Date.now() - t0,
     };
   } catch (err) {

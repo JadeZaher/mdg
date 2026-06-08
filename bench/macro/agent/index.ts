@@ -18,11 +18,29 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { getClient } from "./client.js";
 import { runLoop } from "./loop.js";
+import { getOpenRouterClient, DEFAULT_OPENROUTER_MODEL } from "./openrouter-client.js";
+import { runLoopOpenAI } from "./loop-openai.js";
 import { CONTROL_TOOL_DEFS, buildControlDispatch } from "./tools-control.js";
 import {
   ALL_TREATMENT_SCHEMAS,
   buildTreatmentDispatch,
 } from "./tools-treatment.js";
+
+/**
+ * Provider selection:
+ *   MDG_BENCH_PROVIDER=anthropic (default) — uses Anthropic SDK + Haiku 4.5.
+ *   MDG_BENCH_PROVIDER=openrouter         — uses OpenAI SDK against OpenRouter,
+ *                                            default model DeepSeek V4 Pro.
+ *
+ * OpenRouter avoids our Anthropic org rate limit (50k input tokens/min
+ * shared across parallel benches) and lets us run multiple LLM-driven
+ * tiers concurrently without contention.
+ */
+type Provider = "anthropic" | "openrouter";
+function pickProvider(): Provider {
+  const v = (process.env.MDG_BENCH_PROVIDER ?? "anthropic").toLowerCase();
+  return v === "openrouter" ? "openrouter" : "anthropic";
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -136,20 +154,24 @@ ${ANSWER_FORMAT_BLOCK}`;
  * the benchmark driver should catch this and skip the run.
  */
 export async function runAgent(opts: RunOptions): Promise<RunOutput> {
-  const apiKey = process.env["ANTHROPIC_API_KEY"];
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY not set");
+  const provider = pickProvider();
+  if (provider === "anthropic") {
+    const apiKey = process.env["ANTHROPIC_API_KEY"];
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   }
 
   const arm = opts.arm;
   const maxTurns = opts.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxInputTokens = opts.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
-  const modelId = opts.modelId ?? DEFAULT_MODEL;
+  const modelId =
+    opts.modelId ??
+    (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : DEFAULT_MODEL);
   const cwd = opts.cwd ?? REPO_ROOT;
   const palacePath = opts.palacePath;
   const onProgress = opts.onProgress;
+  const systemPrompt = arm === "treatment" ? TREATMENT_SYSTEM_PROMPT : CONTROL_SYSTEM_PROMPT;
 
-  // Build tool schemas + dispatch map for the chosen arm.
+  // Tool schemas + dispatch map for the chosen arm.
   const tools =
     arm === "control"
       ? CONTROL_TOOL_DEFS.map((d) => d.schema)
@@ -160,35 +182,68 @@ export async function runAgent(opts: RunOptions): Promise<RunOutput> {
       ? buildControlDispatch(cwd)
       : buildTreatmentDispatch(cwd, palacePath);
 
-  const client = await getClient();
-
   const t0 = Date.now();
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let toolCalls = 0;
+  let turns = 0;
+  let finalText = "";
+  let hitCap: "turns" | "input_tokens" | "none" = "none";
 
-  const loopResult = await runLoop({
-    client,
-    modelId,
-    tools,
-    dispatch,
-    systemPrompt: arm === "treatment" ? TREATMENT_SYSTEM_PROMPT : CONTROL_SYSTEM_PROMPT,
-    taskPrompt: opts.taskPrompt,
-    maxTurns,
-    interTurnDelayMs: opts.interTurnDelayMs ?? 0,
-    maxRetries: opts.maxRetries ?? 5,
-    maxInputTokens,
-    onProgress,
-  });
+  if (provider === "openrouter") {
+    const client = await getOpenRouterClient();
+    const r = await runLoopOpenAI({
+      client,
+      modelId,
+      tools,
+      dispatch,
+      systemPrompt,
+      taskPrompt: opts.taskPrompt,
+      maxTurns,
+      maxInputTokens,
+      interTurnDelayMs: opts.interTurnDelayMs ?? 0,
+      maxRetries: opts.maxRetries ?? 5,
+      onProgress,
+    });
+    finalText = r.finalText;
+    inputTokens = r.inputTokens;
+    outputTokens = r.outputTokens;
+    toolCalls = r.toolCalls;
+    turns = r.turns;
+    hitCap = r.hitCap;
+  } else {
+    const client = await getClient();
+    const r = await runLoop({
+      client,
+      modelId,
+      tools,
+      dispatch,
+      systemPrompt,
+      taskPrompt: opts.taskPrompt,
+      maxTurns,
+      interTurnDelayMs: opts.interTurnDelayMs ?? 0,
+      maxRetries: opts.maxRetries ?? 5,
+      maxInputTokens,
+      onProgress,
+    });
+    finalText = r.finalText;
+    inputTokens = r.inputTokens;
+    outputTokens = r.outputTokens;
+    toolCalls = r.toolCalls;
+    turns = r.turns;
+    hitCap = r.hitCap;
+  }
 
   const ms = Date.now() - t0;
-
   return {
     arm,
     modelId,
-    finalText: loopResult.finalText,
-    inputTokens: loopResult.inputTokens,
-    outputTokens: loopResult.outputTokens,
-    toolCalls: loopResult.toolCalls,
-    turns: loopResult.turns,
+    finalText,
+    inputTokens,
+    outputTokens,
+    toolCalls,
+    turns,
     ms,
-    hitCap: loopResult.hitCap,
+    hitCap,
   };
 }
