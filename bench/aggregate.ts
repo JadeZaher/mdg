@@ -269,10 +269,19 @@ function convSavings(conv: ConvFile | null): string {
   return lines.join("\n");
 }
 
-function whatItMeans(meso: MesoFile | null, me: MesoEmbedFile | null, conv: ConvFile | null): string {
+function whatItMeans(
+  meso: MesoFile | null,
+  me: MesoEmbedFile | null,
+  conv: ConvFile | null,
+  typo: TypoFile | null,
+  macro: MacroFile | null,
+  mt: MultiTurnFile | null,
+  comp: CompactionFile | null,
+): string {
   const lines = ["## What the numbers mean", ""];
   const wins: string[] = [];
   const loses: string[] = [];
+  lines.push("### Search substrate (no agent in the loop)", "");
 
   if (conv) {
     const rg = conv.summary["ripgrep"];
@@ -327,9 +336,71 @@ function whatItMeans(meso: MesoFile | null, me: MesoEmbedFile | null, conv: Conv
     }
   }
 
+  // Typo tier commentary.
+  if (typo) {
+    const f = typo.summary["mdg-fuzzy"];
+    const rg = typo.summary["rg"];
+    if (f && rg) {
+      lines.push(
+        `- **Typo tolerance**: \`mdg --fuzzy\` hits **${fmtPct(f.recall)} recall** on typo'd queries (edit distance ≤ 2) at ${fmtPct(f.prec)} precision; rg gets ${fmtPct(rg.recall)} because the literal isn't there.`,
+      );
+      if (f.recall - rg.recall > 0.3) {
+        wins.push(`**${fmtPct(f.recall)} typo recall** at edit distance ≤ 2 via \`--fuzzy\` (rg: ${fmtPct(rg.recall)}). Catches drop/insert/substitute/swap typos at a fraction of embedding cost.`);
+      }
+    }
+  }
+
+  // Agent-tier commentary.
+  if (macro?.summary || mt?.summary || comp?.summary) {
+    lines.push("", "### Agent-in-the-loop (macro, multi-turn, compaction)", "");
+  }
+  if (macro?.summary) {
+    const c = macro.summary.control;
+    const t = macro.summary.treatment;
+    const passDelta = (t.pass_rate - c.pass_rate);
+    const turnRatio = c.mean_turns === 0 ? 1 : t.mean_turns / c.mean_turns;
+    const outRatio = c.mean_output_tokens === 0 ? 1 : t.mean_output_tokens / c.mean_output_tokens;
+    const inRatio = c.mean_input_tokens === 0 ? 1 : t.mean_input_tokens / c.mean_input_tokens;
+    lines.push(
+      `- **Macro task lift (${macro.model || "agent"}, ${macro.tasks} tasks)**: pass-rate ${fmtPct(c.pass_rate)}/${fmtPct(t.pass_rate)} (${passDelta >= 0 ? "+" : ""}${fmtPct(passDelta)} lift). Treatment converges in **${t.mean_turns.toFixed(1)} turns vs ${c.mean_turns.toFixed(1)}** (${turnRatio < 1 ? `${fmtPct(1 - turnRatio)} fewer` : `${fmtPct(turnRatio - 1)} more`}) and emits ${outRatio < 1 ? `**${fmtPct(1 - outRatio)} less**` : `${fmtPct(outRatio - 1)} more`} output reasoning. Input tokens: ${inRatio < 1 ? `**${fmtPct(1 - inRatio)} cheaper**` : `+${fmtPct(inRatio - 1)} (mdg results inline)`}.`,
+    );
+    if (passDelta >= 0 && (turnRatio < 0.9 || outRatio < 0.9)) {
+      wins.push(`Macro: ${fmtPct(c.pass_rate)}/${fmtPct(t.pass_rate)} pass; treatment uses ${(c.mean_turns / Math.max(0.01, t.mean_turns)).toFixed(2)}× fewer turns. The lens isn't "always cheaper" — it's "fewer round-trips and less verbose reasoning."`);
+    }
+    if (inRatio > 1.1) {
+      loses.push(`Macro: treatment pays +${fmtPct(inRatio - 1)} input tokens. mdg result blocks accumulate in context faster than rg lines. For single-word lookups, the lens prompt explicitly tells the agent to use bash grep.`);
+    }
+  }
+  if (mt?.summary) {
+    const c = mt.summary.control;
+    const t = mt.summary.treatment;
+    const passDelta = t.pass_rate - c.pass_rate;
+    const inDelta = c.mean_input_tokens === 0 ? 0 : (t.mean_input_tokens / c.mean_input_tokens) - 1;
+    lines.push(
+      `- **Multi-turn (${mt.model || "agent"}, ${c.n} scenarios)**: **${passDelta >= 0 ? "+" : ""}${fmtPct(passDelta)} pass-rate lift** (${fmtPct(c.pass_rate)} → ${fmtPct(t.pass_rate)}), ${inDelta < 0 ? `**${fmtPct(Math.abs(inDelta))} fewer**` : `+${fmtPct(inDelta)}`} input tokens. Across multiple related questions, the mind palace makes evidence reusable so later turns don't re-search.`,
+    );
+    if (passDelta > 0.1) {
+      wins.push(`**+${fmtPct(passDelta)} multi-turn pass-rate lift** with mind palace stashing across turns (${fmtPct(c.pass_rate)} → ${fmtPct(t.pass_rate)})${inDelta < 0 ? `, at ${fmtPct(Math.abs(inDelta))} fewer input tokens` : ""}.`);
+    }
+  }
+  if (comp?.summary && comp.summary["mdg-scan"] && comp.summary["summarization"]) {
+    const sc = comp.summary["mdg-scan"];
+    const sum = comp.summary["summarization"];
+    const tr = comp.summary["truncation"];
+    const ag = comp.summary["mdg-agent"];
+    lines.push(
+      `- **Compaction (${(comp.tasks ?? sc.n)} topics × ${Object.keys(comp.summary).length} arms, ~2000-token budget)**: **mdg-scan (zero-LLM)** beats single-pass LLM summarization on pass-rate (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)})${tr ? ` and beats truncation (${fmtPct(tr.mean_pass_rate)})` : ""} at **zero LLM input tokens**. For "compact a topic to N tokens, then Q&A from it," \`mdg --effort scan --clip 30 --sort recent --max-tokens N\` is more reliable than spending ~${num(sum.mean_input_tokens)} tokens on summarization.${ag ? ` The LLM-driven mdg-agent arm under-performs (${fmtPct(ag.mean_pass_rate)} pass) because the agent emits a status message instead of writing the file — a model-behavior failure mode, not a tooling one.` : ""}`,
+    );
+    if (sc.mean_pass_rate > sum.mean_pass_rate) {
+      wins.push(`**Zero-LLM compaction beats LLM summarization** at the same budget (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)} pass), at zero LLM input tokens. Use \`mdg --effort scan --clip 30 --sort recent --max-tokens N\` instead of an LLM round-trip when the goal is "compact for downstream Q&A."`);
+    }
+    if (ag && ag.mean_pass_rate < 0.2) {
+      loses.push(`LLM-driven mdg-agent compaction: ${fmtPct(ag.mean_pass_rate)} pass — the model emits a short "done" status instead of writing the actual compaction to the file the bench reads. Headline mdg-as-compaction is the zero-LLM scan arm, not the agentic one.`);
+    }
+  }
+
   // Structural wins/losses that don't depend on the run.
   wins.push("Mind palace set semantics hold (micro: compose=union, intersect=intersection, prune-keep by recency, graph terminates on cycles). rg has no equivalent of any of these — and mdg's actual pitch is **stash, recall, compose across turns**, which rg structurally cannot do.");
-  loses.push("One semantic anomaly in `--mp-except` (micro: 1/17). Logged for investigation.");
 
   lines.push("");
   lines.push("## Where mdg wins and loses");
@@ -615,7 +686,7 @@ function main(): void {
     mesoSection(meso),
     mesoEmbedSection(me),
     mesoComparison(meso, me),
-    whatItMeans(meso, me, conv),
+    whatItMeans(meso, me, conv, typo, macro, mt, comp),
   ].join("\n");
   const outPath = join(repoRoot(), "BENCHMARKS.md");
   writeFileSync(outPath, body);
