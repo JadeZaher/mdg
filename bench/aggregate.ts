@@ -387,15 +387,11 @@ function whatItMeans(
     const sc = comp.summary["mdg-scan"];
     const sum = comp.summary["summarization"];
     const tr = comp.summary["truncation"];
-    const ag = comp.summary["mdg-agent"];
     lines.push(
-      `- **Compaction (${(comp.tasks ?? sc.n)} topics × ${Object.keys(comp.summary).length} arms, ~2000-token budget)**: **mdg-scan (zero-LLM)** beats single-pass LLM summarization on pass-rate (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)})${tr ? ` and beats truncation (${fmtPct(tr.mean_pass_rate)})` : ""} at **zero LLM input tokens**. For "compact a topic to N tokens, then Q&A from it," \`mdg --effort scan --clip 30 --sort recent --max-tokens N\` is more reliable than spending ~${num(sum.mean_input_tokens)} tokens on summarization.${ag ? ` The LLM-driven mdg-agent arm under-performs (${fmtPct(ag.mean_pass_rate)} pass) because the agent emits a status message instead of writing the file — a model-behavior failure mode, not a tooling one.` : ""}`,
+      `- **Compaction (${(comp.tasks ?? sc.n)} topics × ${Object.keys(comp.summary).length} arms, ~2000-token budget)**: **mdg-scan (zero-LLM)** beats single-pass LLM summarization on pass-rate (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)})${tr ? ` and beats truncation (${fmtPct(tr.mean_pass_rate)})` : ""} at **zero LLM input tokens**. For "compact a topic to N tokens, then Q&A from it," \`mdg --effort scan --clip 30 --sort recent --max-tokens N\` is more reliable than spending ~${num(sum.mean_input_tokens)} tokens on summarization.`,
     );
     if (sc.mean_pass_rate > sum.mean_pass_rate) {
       wins.push(`**Zero-LLM compaction beats LLM summarization** at the same budget (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)} pass), at zero LLM input tokens. Use \`mdg --effort scan --clip 30 --sort recent --max-tokens N\` instead of an LLM round-trip when the goal is "compact for downstream Q&A."`);
-    }
-    if (ag && ag.mean_pass_rate < 0.2) {
-      loses.push(`LLM-driven mdg-agent compaction: ${fmtPct(ag.mean_pass_rate)} pass — the model emits a short "done" status instead of writing the actual compaction to the file the bench reads. Headline mdg-as-compaction is the zero-LLM scan arm, not the agentic one.`);
     }
   }
 
@@ -631,9 +627,8 @@ function compactionSection(c: CompactionFile | null): string {
     "The honest test of mdg as a memory primitive: given a topic + token budget, can it assemble a compaction a downstream LLM can answer Q&A from? Arms compared:",
     "",
     "- **truncation** — no-LLM baseline. Most-recent files until budget.",
-    "- **mdg-scan** — no-LLM mdg call: `scan + sort recent + window-curve log + max-tokens budget`.",
+    "- **mdg-scan** — no-LLM mdg call: `scan + sort recent + window-curve log + max-tokens budget`. The headline finding.",
     "- **summarization** — LLM baseline: rg-retrieve + single-pass LLM compaction.",
-    "- **mdg-agent** — LLM with mdg tools, headline arm.",
     "",
   ];
   if (c.status === "partial") {

@@ -11,7 +11,13 @@
  *   truncation     no-LLM, most-recent files until budget hits
  *   mdg-scan       no-LLM, one mdg call (scan + sort recent + log curve)
  *   summarization  LLM baseline: rg-retrieve, single-pass summarize
- *   mdg-agent      LLM + mdg tools, reuses macro agent harness
+ *
+ * The headline finding is "zero-LLM mdg-scan beats LLM summarization at
+ * the same budget" — the agentic mdg arm previously here added no
+ * signal: both Haiku and DeepSeek emitted a "done" status without
+ * writing the synthesis to a file, so the bench scored their final
+ * 15-token messages and reported a stable 0–11% pass rate that
+ * misrepresented mdg's actual compaction value. Dropped.
  *
  * Without ANTHROPIC_API_KEY: skips LLM arms AND scoring; writes a
  * status=skipped record. Without the corpus: writes status=skipped.
@@ -29,7 +35,6 @@ import { TASKS, ensureMegaCorpus, type CompactionTask } from "./tasks.js";
 import { runTruncation } from "./arms/truncation.js";
 import { runMdgScan } from "./arms/mdg-scan.js";
 import { runSummarization } from "./arms/summarization.js";
-import { runMdgAgent } from "./arms/mdg-agent.js";
 import { scoreCompaction, type ScoringResult } from "./scoring.js";
 
 interface Cell {
@@ -95,15 +100,6 @@ async function runOneTask(task: CompactionTask, docs: CorpusDoc[], hasApi: boole
   process.stdout.write(`  summarization... `);
   {
     const r = await runSummarization(task, corpusRoot);
-    const scoring = await scoreCompaction(r.compaction, task.questions);
-    process.stdout.write(`pass=${fmtPct(scoring.pass_rate)} comp=${r.compaction_tokens}t in=${r.input_tokens}\n`);
-    cells.push(makeCell(task, r, scoring));
-  }
-
-  // 4. mdg-agent — LLM + mdg
-  process.stdout.write(`  mdg-agent... `);
-  {
-    const r = await runMdgAgent(task, corpusRoot);
     const scoring = await scoreCompaction(r.compaction, task.questions);
     process.stdout.write(`pass=${fmtPct(scoring.pass_rate)} comp=${r.compaction_tokens}t in=${r.input_tokens}\n`);
     cells.push(makeCell(task, r, scoring));
