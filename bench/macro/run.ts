@@ -72,7 +72,10 @@ async function runOne(task: TaskSpec, arm: "control" | "treatment"): Promise<Cel
       arm,
       maxTurns: 20,
       maxInputTokens: 50_000,
-      modelId: process.env.MDG_BENCH_MODEL ?? "claude-haiku-4-5-20251001",
+      // Let runAgent pick the default for the active provider
+      // (deepseek/deepseek-v4-pro for openrouter, haiku for anthropic).
+      // Only override with MDG_BENCH_MODEL if explicitly set.
+      modelId: process.env.MDG_BENCH_MODEL,
       palacePath,
       cwd: FRACTAL_ROOT,
       interTurnDelayMs: 500,

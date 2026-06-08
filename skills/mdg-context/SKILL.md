@@ -25,6 +25,33 @@ install:
 
 # mdg-context — Codebase Context Retrieval Skill
 
+## The lens mental model
+
+mdg is a single **lens over the corpus**, not a separate tool you reach
+for after grep and read. There are no boundaries between files — you
+dial the lens to fit the task:
+
+- **Focal points** = matches (set by the pattern + sort + fuzzy).
+- **Depth at each focal point** = the window (`effort` / `clip_chars` /
+  `before` / `after` / `window_curve`).
+- **Surface** = where the lens looks (`in`, `from`, `compose`, `page`).
+
+With the right flags, one `mdg_search` call replaces what would
+otherwise be 1–N `grep` + `read` combos:
+
+| Job | Lens setting |
+| :--- | :--- |
+| "List file:line hits, like grep" | `effort: "scan", clip_chars: 30` (3.2× cheaper than rg on bench corpora) |
+| "Read this one file for what it says about X" | `in: ["file.md"], effort: "deep"` |
+| "Browse recent memory for X" | `effort: "scan", sort: "recent", page: 1, page_size: 10` |
+| "Compact a topic to N tokens" | `effort: "scan", clip_chars: 30, max_tokens: N` |
+| "Catch a typo'd term" | `fuzzy: true` |
+| "Search only files I already touched" | `from: "<stash-name>"` |
+
+The mind palace (`mdg_stash`) is just persistent state for the lens:
+stash a result and the next search can be scoped to those files
+across the entire corpus without re-scanning.
+
 ## Quick start
 
 ```bash
@@ -36,6 +63,9 @@ Cline, Windsurf, Continue.dev), the five tools below register
 automatically once the `mdg` MCP server is configured.
 
 ## When to use
+
+The lens table above is the short answer. Below is the same advice
+indexed by situation.
 
 | Situation | Tool |
 | :--- | :--- |

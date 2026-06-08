@@ -82,9 +82,17 @@ function str(v: unknown, fallback = ""): string {
 const mdgSearchSchema: Tool = {
   name: "mdg_search",
   description:
-    "Search the codebase using mdg. Returns token-budgeted context nodes around " +
-    "each match. Optionally stash the results via 'stash_name' for later recall " +
-    "without re-searching.",
+    "Search files with mdg. Think of mdg as a LENS over the corpus with no boundary " +
+    "between files — you set the focal points (matches) and their depth (window). " +
+    "It does what grep does (file:line hits) AND what read does (full content), " +
+    "depending on flags. " +
+    "TLDR:\n" +
+    "  - To grep: effort='scan', clip_chars=30 -> 3.2x cheaper than rg at same recall.\n" +
+    "  - To read one file: in=['file.md'], effort='deep' -> full content via the lens.\n" +
+    "  - To browse recency: effort='scan', sort='recent', page=1, page_size=10.\n" +
+    "  - To compact a topic: effort='scan', clip_chars=30, max_tokens=2000.\n" +
+    "  - For typos: fuzzy=true (handles drop/insert/swap/sub, edit dist <= 2).\n" +
+    "  - Stash via stash_name to reuse across turns; later scope with from='<name>'.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -95,41 +103,91 @@ const mdgSearchSchema: Tool = {
       in: {
         type: "array",
         items: { type: "string" },
-        description: "Paths, directories, or globs to search in.",
+        description: "Files, directories, or globs to search. Single file = 'read this file'.",
       },
       effort: {
         type: "string",
-        enum: ["quick", "normal", "deep"],
+        enum: ["scan", "quick", "normal", "deep"],
         description:
-          "Effort preset: quick=200t/10n, normal=500t/30n, deep=2000t/100n. Default: normal.",
+          "Lens depth. scan=20t windows uncapped (cheap index, like grep). " +
+          "quick=200t/10n. normal=500t/30n. deep=2000t/100n (like read). Default: quick.",
       },
       max_nodes: {
         type: "number",
-        description: "Maximum number of nodes to return.",
+        description: "Maximum number of nodes to return. Use to cap result size.",
+      },
+      max_tokens: {
+        type: "number",
+        description:
+          "Total token budget across all returned nodes. Use to produce a compaction " +
+          "in a fixed budget (e.g. max_tokens: 2000 for a 2k-token summary).",
       },
       before: {
         type: "number",
-        description: "Tokens of context before each match.",
+        description: "Tokens of context before each match (overrides effort preset).",
       },
       after: {
         type: "number",
-        description: "Tokens of context after each match.",
+        description: "Tokens of context after each match (overrides effort preset).",
+      },
+      clip_chars: {
+        type: "number",
+        description:
+          "Sub-line snippet mode. Drops line context entirely; trims the match line to " +
+          "this many chars on each side of the matched span (with ellipsis markers). " +
+          "Combine with effort='scan' for the cheapest possible hit list — " +
+          "~30 tokens per hit, beats raw rg on tokens at the same recall. " +
+          "Use 0-50 for a tight index, 100+ when more snippet context helps.",
+      },
+      fuzzy: {
+        type: "boolean",
+        description:
+          "Typo-tolerant search. Handles drop/insert/substitute/swap typos at " +
+          "edit distance <= 2 via trigram-union + Levenshtein. Use when the user " +
+          "input might be misspelled.",
+      },
+      sort: {
+        type: "string",
+        enum: ["default", "recent", "oldest"],
+        description:
+          "Order returned nodes by source file mtime. 'recent' surfaces what just " +
+          "changed first — great with scan for a time-ordered memory index. " +
+          "Paginate to browse back in history.",
+      },
+      window_curve: {
+        type: "string",
+        enum: ["flat", "linear", "log"],
+        description:
+          "Per-node window decay across ranks. flat: every node full. " +
+          "linear: full at rank 0, ~10% at last. log: full / log2(rank+2). " +
+          "Combine with sort='recent' for rich context on recent hits, " +
+          "tight windows on older ones. 'log' saves ~50% tokens at rank-0 parity.",
+      },
+      page: {
+        type: "number",
+        description: "1-indexed page number for paginated results.",
+      },
+      page_size: {
+        type: "number",
+        description: "Items per page. Default 10 for nodes.",
       },
       from: {
         type: "string",
         description:
-          "Use a previously stashed file list as the search target (stash name).",
+          "Use a previously stashed file list as the search target (stash name). " +
+          "Replaces the search root with just the files in the stash — much cheaper " +
+          "than re-searching the whole corpus.",
       },
       compose: {
         type: "array",
         items: { type: "string" },
-        description: "Compose search across multiple stash file lists.",
+        description: "Compose search across multiple stash file lists (union).",
       },
       stash_name: {
         type: "string",
         description:
           "If provided, stash results under this name in the mind palace. " +
-          "Combine with stash_note / stash_tags.",
+          "Stash anything you'll reference later; future searches scope via from='<name>'.",
       },
       stash_note: {
         type: "string",
@@ -166,11 +224,31 @@ function mdgSearchImpl(
   const maxNodes = input["max_nodes"];
   if (typeof maxNodes === "number") args.push("--max-nodes", String(maxNodes));
 
+  const maxTokens = input["max_tokens"];
+  if (typeof maxTokens === "number") args.push("--max-tokens", String(maxTokens));
+
   const before = input["before"];
   if (typeof before === "number") args.push("--before", String(before));
 
   const after = input["after"];
   if (typeof after === "number") args.push("--after", String(after));
+
+  const clipChars = input["clip_chars"];
+  if (typeof clipChars === "number") args.push("--clip", String(clipChars));
+
+  if (input["fuzzy"] === true) args.push("--fuzzy");
+
+  const sort = str(input["sort"]);
+  if (sort) args.push("--sort", sort);
+
+  const windowCurve = str(input["window_curve"]);
+  if (windowCurve) args.push("--window-curve", windowCurve);
+
+  const page = input["page"];
+  if (typeof page === "number") args.push("--page", String(page));
+
+  const pageSize = input["page_size"];
+  if (typeof pageSize === "number") args.push("--page-size", String(pageSize));
 
   const from = str(input["from"]);
   if (from) args.push("--mp-from", from);

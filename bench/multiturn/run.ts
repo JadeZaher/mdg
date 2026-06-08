@@ -173,7 +173,7 @@ async function runOne(
       // 3-4 related questions to be answered.
       maxTurns: 15,
       maxInputTokens: 60_000,
-      modelId,
+      modelId: modelId || undefined,
       palacePath,
       cwd: FRACTAL_ROOT,
       // 750 ms between turns: Anthropic's per-minute limits are ~50
@@ -303,8 +303,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const modelId =
-    process.env["MDG_BENCH_MODEL"] ?? "claude-haiku-4-5-20251001";
+  // Empty string -> let runAgent pick the default for the active provider.
+  const modelId = process.env["MDG_BENCH_MODEL"] ?? "";
 
   process.stdout.write(
     `\nMulti-turn bench — ${SCENARIOS.length} scenarios × 2 arms = ${SCENARIOS.length * 2} runs\n`,
