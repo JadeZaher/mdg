@@ -11,6 +11,11 @@ description: >
   programmatic import (Anthropic / Google SDKs).
   Use for codebase exploration, multi-step investigation, finding
   references, and building cross-invocation working memory.
+  DO NOT use mdg for: a single known file path (use Read); a single
+  symbol grep on a small tree where you expect ≤ ~30 hits (use Grep);
+  files under ~200 lines you'll fully consume (the budgeting overhead
+  is only worth it for >1KB result sets or persistent recall). The
+  decision tree under "When NOT to use mdg" makes the cutoff concrete.
 tools:
   - mdg_search
   - mdg_stash
@@ -51,6 +56,59 @@ otherwise be 1–N `grep` + `read` combos:
 The mind palace (`mdg_stash`) is just persistent state for the lens:
 stash a result and the next search can be scoped to those files
 across the entire corpus without re-scanning.
+
+## When NOT to use mdg
+
+mdg has a real startup cost (~200ms cold) and the budgeting machinery
+only pays off above a certain payload size. Use the wrong tool for the
+job and you pay overhead for no win. The cutoffs in plain terms:
+
+```
+mdg vs alternative?
+├─ Known file path, you want to read it       → host's Read tool
+├─ Single symbol grep, ≤ ~30 hits expected    → host's Grep / rg
+├─ One file < 200 lines, you'll read it all   → Read it directly
+├─ One-word "does X exist?" answer            → rg / grep is cheaper
+├─ Multi-file scan, results > ~1KB total      → mdg_search
+├─ Need persistent recall across turns        → mdg_search + mdg_stash
+├─ Cross-cutting investigation, 2+ threads    → mdg_search --mp-compose
+├─ Already stashed the file set you want      → --mp-from (skip re-scan)
+└─ Opaque tool output > ~3KB you want to filter → mdg --cmd or --url
+```
+
+Hard rule: **if you can name the file and you're going to consume the
+whole thing, do not route through mdg**. The token budgeter assumes you
+want a *subset* of a *larger* payload. When the payload is small, the
+overhead (~200ms cold start, plus token-counting work) buys nothing.
+
+## Palace lifecycle (one cycle = one task)
+
+The palace is **working memory**, not an archive. Plan stash usage along
+this cycle — it's the difference between "I have 47 stashes and no idea
+which ones matter" and "I have 8 stashes that map to the open threads."
+
+```
+                  ┌─────────────────────────────────────┐
+                  ↓                                     │
+  CAPTURE  →  TAG  →  LINK  →  REUSE  →  PRUNE  →  CLOSE
+  (--mp-stash)        (--mp-link)   (--mp-from)   (--mp-prune-*)
+                                    (--mp-compose)
+```
+
+| Verb | When | Flag |
+| :--- | :--- | :--- |
+| **Capture** | Anything you might reference more than once. Cheap. | `--mp-stash <name> <note> --mp-ttl 4h` |
+| **Tag** | At capture time. Repeat the flag for multiple tags. | `--mp-stash-tag scan --mp-stash-tag topic` (NOT comma-separated — that becomes one literal tag named `scan,topic`) |
+| **Link** | The moment you notice a relationship — three sessions later you won't remember why two stashes mattered together. | `--mp-link <from> <to> <type> [note]` |
+| **Reuse** | Re-scope a deeper search to a stash's file list. 3× cheaper than re-scanning the whole tree. | `--mp-from <name>` (one), `--mp-compose <a> <b>` (union), `--mp-intersect` (both) |
+| **Prune** | At session open AND between major phases. The palace should shrink between sessions, not grow. | `--mp-prune-expired` (free), `--mp-prune-tag scan` (drop scratch), `--mp-prune-keep 20` (cap) |
+| **Close** | At session close, drop scratch tags; keep findings. | `--mp-prune-tag scan` |
+
+Three rules of thumb for the lifecycle:
+
+1. **Always TTL scratch.** `--mp-ttl 4h` on exploratory scans, `--mp-ttl 24h` on findings, no TTL on canonical context. Auto-prune on `--mp-list`/`--mp-get` will clean up the rest.
+2. **One palace per task.** Set `MDG_MIND_PALACE=.mdg/<task>.json` or pass `--mp-path` per invocation. Today there is one *active* palace per call — there is no cross-palace federation; isolation is the path you point at. Don't mix unrelated tasks in one palace.
+3. **`--mp-list` is the palace overview; `--mp-get` is the per-stash card view; `--mp-get --with-nodes` is the full read.** `--mp-list` is one line of metadata per stash — best for "what's in my palace?". `--mp-get <name>` is the **card view by default**: note, tags, relations, sources, and counts (5–6× cheaper than the old full dump — the synthesized intel without the captured bodies). Add `--with-nodes` (or its synonym `--full`) only when you actually need the captured node context. Pagination only applies in `--with-nodes` mode; use `--page 1 --page-size 5` when a stash is large.
 
 ## Quick start
 
@@ -346,6 +404,21 @@ The full set of graph operations is CLI-only (not MCP yet) —
 `--mp-link`, `--mp-unlink`, `--mp-related`, `--mp-graph`. See
 `references/mind-palace.md` for the storage format.
 
+**Traversal semantics worth knowing:**
+
+- `--mp-related <name>` — shows direct neighbors in **both directions**
+  (inbound and outbound). Use this for a single-hop "what's connected to
+  X" view.
+- `--mp-graph <name> [depth]` — BFS from `<name>`. Depth 1 is
+  **bidirectional** (both outbound edges from `<name>` and inbound edges
+  pointing at `<name>`). Depth ≥ 2 follows **outbound only**. A leaf-to-leaf
+  edge (e.g. `a → c` and `b → c` from a root that points at both `a` and
+  `b`) shows up exactly once via the first BFS path that reaches `c`; the
+  second edge is hidden by visited-deduplication.
+- If you suspect a relationship the graph isn't surfacing, fall back to
+  `--mp-related` on the *target* of the suspected edge — that view is
+  always bidirectional.
+
 ### Behavior you can rely on
 
 These are the load-bearing guarantees worth quoting at yourself before
@@ -380,7 +453,7 @@ deciding whether to re-search vs recall:
 | `mdg_search` | `pattern` | `in[]`, `cmd`, `url`, `before`, `after`, `max_nodes`, `max_tokens`, `effort` (scan/quick/normal/deep), `strategy`, `from`, `compose[]`, `page`, `page_size`, `all`, **`clip_chars`** (sub-line snippet N), **`fuzzy`** (typo-tolerant), **`sort`** ("recent"/"oldest"/"default"), **`window_curve`** ("flat"/"linear"/"log") |
 | `mdg_stash` | `name` | `note`, `tags[]`, `replace` |
 | `mdg_list_stashes` | — | `tag_filter[]`, `page`, `page_size` |
-| `mdg_get_stash` | `name` | `page`, `page_size` |
+| `mdg_get_stash` | `name` | `with_nodes` (default false — card view; pass `true` for full nodes), `page`, `page_size` (only honored with `with_nodes: true`) |
 | `mdg_drop_stash` | `name` | — |
 
 The mind palace has a *wider* surface than the five MCP tools above
@@ -413,7 +486,7 @@ Same pattern for `mdg_list_stashes` and `mdg_get_stash`.
 | Condition | What to do |
 | :--- | :--- |
 | `status: "no_matches"` | Broaden pattern, drop `-w`, add `-I` (case-insensitive). |
-| `status: "truncated"` | Hit `--max-tokens`. Narrow pattern OR increase budget. |
+| `status: "truncated"` | Hit `--max-tokens`. Narrow pattern OR increase budget. If you stash truncated results, the stash inherits the same partial node set — the search-level truncation marker is the only signal, and the `mdg: created stash …` line does not restate it. When stashing for archival purposes, drop `--max-tokens` or raise it well above the expected hit count so the stash is complete. |
 | `status: "partial"` | Some sources errored, others returned matches. Inspect `result.errors[]` — decide whether the missing sources mattered. Common cause: a single pathological file (minified asset) that you can `--exclude`. |
 | `status: "error"` | All sources errored. Check `result.errors[]` and stderr. Common: unknown stash name (`mdg_list_stashes`), rg not installed, bad regex. |
 | Unknown stash | Run `mdg_list_stashes` to discover. |

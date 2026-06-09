@@ -778,16 +778,24 @@ export const claudeTools = [
     function: {
       name: "mdg_get_stash",
       description:
-        "Show the full contents of a single mind-palace slot: its note, tags, " +
-        "search provenance, all stashed nodes with context, and the list of " +
-        "source file paths (which can be passed to mdg_search as the 'from' field). " +
-        "Supports pagination for large stashes.",
+        "Show a single mind-palace slot. Returns the CARD VIEW by default: " +
+        "the synthesized intel an agent almost always wants — note, tags, " +
+        "search provenance, source paths (passable as mdg_search 'from'), " +
+        "relations, and node/source counts. The captured node bodies are " +
+        "omitted (5–6× cheaper). Pass with_nodes:true to include the full " +
+        "stashed nodes block; pagination only applies in that mode.",
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Name of the stash to retrieve." },
-          page: { type: "number", description: "1-indexed page number." },
-          page_size: { type: "number", description: "Nodes per page. Default 10." },
+          with_nodes: {
+            type: "boolean",
+            description:
+              "If true, include the captured node bodies. Default false " +
+              "returns the card view (metadata + relations + sources only).",
+          },
+          page: { type: "number", description: "1-indexed page number (only when with_nodes:true)." },
+          page_size: { type: "number", description: "Nodes per page. Default 10 (only when with_nodes:true)." },
           palace_path: { type: "string", description: "Override mind-palace file." },
         },
         required: ["name"],

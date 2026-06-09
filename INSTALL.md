@@ -94,8 +94,11 @@ behaviors you can rely on.
 5. Note the behaviors that are load-bearing for agent reasoning:
    directory scans go through rg's parallel walk (don't pre-expand
    to file lists in your tool calls), `--mp-drop` persists reliably
-   under parallel writers, and `--json` is an alias for
-   `--format json`.
+   under parallel writers, `--json` is an alias for `--format json`,
+   and **`--mp-get` defaults to a card view** (note + tags + relations
+   + sources, no captured nodes — 5–6× cheaper than the legacy dump);
+   pass `--with-nodes` or `--full` (CLI) or `with_nodes: true` (MCP /
+   SDK) only when you actually need the node bodies.
 
 This is the difference between mdg being installed and mdg being
 **used.** Without the workflow guidance, future sessions will reach

@@ -162,7 +162,20 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
         args.palace_path as string | undefined,
       );
       if (!result) throw new Error(`No such stash: ${args.name}`);
-      return JSON.stringify(result, null, 2);
+      // Default to the card view (no nodes block) — what an agent
+      // almost always wants. Pass `with_nodes: true` to recover the
+      // legacy full-content dump.
+      const withNodes = args.with_nodes === true;
+      if (!withNodes) {
+        const { nodes: _drop, ...card } = result;
+        return JSON.stringify({
+          ...card,
+          view: "card",
+          nodes_count: result.nodes.length,
+          hint: "Pass with_nodes:true to dump the captured nodes block.",
+        }, null, 2);
+      }
+      return JSON.stringify({ ...result, view: "full" }, null, 2);
     }
 
     case "mdg_drop_stash": {

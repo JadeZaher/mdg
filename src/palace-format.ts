@@ -76,16 +76,27 @@ export function formatPalaceList(
   return out.join("\n");
 }
 
-/** Format the output of --mp-get <name>. */
+/** Format the output of --mp-get <name>.
+ *
+ * `withNodes` controls whether the captured nodes block is rendered.
+ * Default behavior (the **card view**) is `withNodes: false` — it
+ * shows the synthesized intel (note, tags, relations, source paths,
+ * counts) and skips the per-node context windows. This is what an
+ * agent almost always wants when recalling a stash: 5–6× cheaper in
+ * tokens than the legacy full dump. Pass `withNodes: true` (CLI:
+ * `--with-nodes` or `--full`) to include the nodes block. Pagination
+ * is honored only in the nodes mode. */
 export function formatPalaceGet(
   stash: Stash,
   palacePath: string,
   useColor: boolean,
   pagination?: PaginationMeta,
+  withNodes = false,
 ): string {
   const out: string[] = [];
   const ann = paginationAnnotation(pagination);
-  out.push(`<mdg mind-palace-get name="${stash.name}" path="${palacePath}"${ann}>`);
+  const view = withNodes ? "full" : "card";
+  out.push(`<mdg mind-palace-get name="${stash.name}" view="${view}" path="${palacePath}"${ann}>`);
   out.push("");
   out.push(c(useColor, BOLD, `STASH: ${stash.name}`));
   out.push(`note:     ${stash.note || c(useColor, DIM, "(no note)")}`);
@@ -101,21 +112,23 @@ export function formatPalaceGet(
   out.push(`nodes:    ${stash.nodes.length}  |  sources: ${stash.sources.length}`);
   out.push("");
 
-  out.push("--- NODES ---");
-  for (let i = 0; i < stash.nodes.length; i++) {
-    const n = stash.nodes[i];
-    out.push("");
-    out.push(`[${i + 1}/${stash.nodes.length}] ${c(useColor, BOLD + FG_CYAN, n.source)}:${n.match_line}  (~${n.tokens}t)`);
-    // Show the captured context window.
-    const width = String(n.end_line).length;
-    for (let j = 0; j < n.context_before.length; j++) {
-      const lineNum = n.start_line + j;
-      out.push(`  ${String(lineNum).padStart(width, " ")}    ${n.context_before[j]}`);
-    }
-    out.push(`  ${String(n.match_line).padStart(width, " ")} >> ${n.match_text}`);
-    for (let j = 0; j < n.context_after.length; j++) {
-      const lineNum = n.match_line + 1 + j;
-      out.push(`  ${String(lineNum).padStart(width, " ")}    ${n.context_after[j]}`);
+  if (withNodes) {
+    out.push("--- NODES ---");
+    for (let i = 0; i < stash.nodes.length; i++) {
+      const n = stash.nodes[i];
+      out.push("");
+      out.push(`[${i + 1}/${stash.nodes.length}] ${c(useColor, BOLD + FG_CYAN, n.source)}:${n.match_line}  (~${n.tokens}t)`);
+      // Show the captured context window.
+      const width = String(n.end_line).length;
+      for (let j = 0; j < n.context_before.length; j++) {
+        const lineNum = n.start_line + j;
+        out.push(`  ${String(lineNum).padStart(width, " ")}    ${n.context_before[j]}`);
+      }
+      out.push(`  ${String(n.match_line).padStart(width, " ")} >> ${n.match_text}`);
+      for (let j = 0; j < n.context_after.length; j++) {
+        const lineNum = n.match_line + 1 + j;
+        out.push(`  ${String(lineNum).padStart(width, " ")}    ${n.context_after[j]}`);
+      }
     }
   }
 
@@ -135,6 +148,10 @@ export function formatPalaceGet(
     }
   }
 
+  if (!withNodes) {
+    out.push("");
+    out.push(c(useColor, DIM, "(card view — pass --with-nodes or --full to dump the captured node context)"));
+  }
   if (pagination) {
     out.push("");
     out.push(c(useColor, DIM, paginationTextNote(pagination) + (pagination.has_next ? " (more pages available — pass --page N)" : "")));

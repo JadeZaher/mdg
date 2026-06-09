@@ -149,8 +149,10 @@ export interface MindPalaceOps {
   stash?: { name: string; note: string; tags: string[]; replace: boolean };
   /** --mp-list: list stashes. */
   list?: { tags: string[] };
-  /** --mp-get: print a stash. */
-  get?: string;
+  /** --mp-get: print a stash. Defaults to a card view (metadata, tags,
+   * relations, source paths — no captured nodes). Pass --with-nodes /
+   * --full to include the captured nodes block. */
+  get?: { name: string; with_nodes: boolean };
   /** --mp-drop: remove a stash. */
   drop?: string;
   /** --mp-from: use a stashed file list as search target. */

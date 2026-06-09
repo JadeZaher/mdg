@@ -85,6 +85,8 @@ export interface RawArgs {
   all: boolean;
   ls: boolean;
   mpStashLocations: boolean;
+  // --mp-get card view opt-out (default: card view; opt-in to full nodes).
+  mpGetWithNodes: boolean;
   // Wide-record auto-tune opt-out.
   noAutoTune: boolean;
   sort?: SortMode;
@@ -168,6 +170,7 @@ NODE SIZING
 
 OUTPUT
   -f, --format <fmt>        llm|markdown|json|text               [default: llm]
+      --json                Alias for --format json (matches rg/gh/jq).
       --color / --no-color  Force or disable ANSI color           [default: auto]
 
 SEARCH OPTIONS (forwarded to ripgrep)
@@ -207,7 +210,16 @@ MIND PALACE (the LLM's instantiable short-term memory)
       --mp-replace               Replace an existing stash outright.
       --mp-list [--mp-list-tag t]  List all stashes (optionally filtered
                                  by tag).
-      --mp-get <name>            Print the full contents of a stash.
+      --mp-get <name>            Print a stash. Default: **card view**
+                                 (note, tags, relations, sources,
+                                 counts — no per-node context). Add
+                                 --with-nodes or --full to include
+                                 the captured node block (the legacy
+                                 behavior). Card view is what an agent
+                                 almost always wants; the nodes block
+                                 is 5–6× more expensive in tokens.
+      --with-nodes, --full       Opt-in to the full node dump on
+                                 --mp-get. Synonyms.
       --mp-drop <name>           Remove a stash from the palace.
       --mp-from <name>           Use a stashed file list as the search
                                  target. The search re-runs fresh.
@@ -336,6 +348,7 @@ export function parseArgs(argv: string[]): RawArgs {
     all: false,
     ls: false,
     mpStashLocations: false,
+    mpGetWithNodes: false,
     noAutoTune: false,
     fuzzy: false,
     help: false,
@@ -443,6 +456,7 @@ export function parseArgs(argv: string[]): RawArgs {
       args.mpListTags.push(requireValue(a, argv, ++i)); i++; continue;
     }
     if (a === "--mp-get") { args.mpGet = requireValue(a, argv, ++i); i++; continue; }
+    if (a === "--with-nodes" || a === "--full") { args.mpGetWithNodes = true; i++; continue; }
     if (a === "--mp-drop") { args.mpDrop = requireValue(a, argv, ++i); i++; continue; }
     if (a === "--mp-from") { args.mpFrom = requireValue(a, argv, ++i); i++; continue; }
     if (a === "--mp-compose") {
@@ -673,7 +687,7 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
       };
     }
     if (raw.mpList) mind_palace.list = { tags: raw.mpListTags };
-    if (raw.mpGet) mind_palace.get = raw.mpGet;
+    if (raw.mpGet) mind_palace.get = { name: raw.mpGet, with_nodes: raw.mpGetWithNodes };
     if (raw.mpDrop) mind_palace.drop = raw.mpDrop;
     if (raw.mpFrom) mind_palace.from = raw.mpFrom;
     if (raw.mpCompose && raw.mpCompose.length > 0) mind_palace.compose = raw.mpCompose;

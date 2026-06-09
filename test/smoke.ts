@@ -484,14 +484,27 @@ function main() {
     assert(/auth-todos/.test(r.stdout), "p0 tag matches auth-todos");
   }
 
-  // Test 27: --mp-get shows full stash contents.
-  process.stdout.write("\nTest 27: --mp-get shows full stash contents\n");
+  // Test 27: --mp-get card view (default) shows metadata + sources only.
+  process.stdout.write("\nTest 27: --mp-get default is card view (no nodes block)\n");
   {
     const r = runMdgPalace(["--mp-get", "auth-todos", "--no-color"]);
     assert(r.code === 0, `exit code 0 (got ${r.code})`);
     assert(/STASH: auth-todos/.test(r.stdout), "shows stash header");
-    assert(/--- NODES ---/.test(r.stdout), "shows nodes section");
+    assert(/view="card"/.test(r.stdout), "advertises card view");
+    assert(!/--- NODES ---/.test(r.stdout), "card view omits nodes block");
     assert(/SOURCES/.test(r.stdout), "shows sources section");
+    assert(/card view — pass --with-nodes/.test(r.stdout), "card view hint visible");
+  }
+
+  // Test 27b: --mp-get --with-nodes (or --full) restores the nodes block.
+  process.stdout.write("\nTest 27b: --mp-get --with-nodes shows nodes block\n");
+  {
+    const r = runMdgPalace(["--mp-get", "auth-todos", "--with-nodes", "--no-color"]);
+    assert(r.code === 0, `exit code 0 (got ${r.code})`);
+    assert(/view="full"/.test(r.stdout), "advertises full view");
+    assert(/--- NODES ---/.test(r.stdout), "full view shows nodes section");
+    const rFull = runMdgPalace(["--mp-get", "auth-todos", "--full", "--no-color"]);
+    assert(/view="full"/.test(rFull.stdout), "--full synonym also yields full view");
   }
 
   // Test 28: --mp-from uses stashed files as search target.
@@ -681,14 +694,18 @@ function main() {
     assert(stashCount === 2, `2 stashes on page 1 of size 2 (got ${stashCount})`);
   }
 
-  // Test 41: --mp-get with --page paginates nodes within a stash.
-  process.stdout.write("\nTest 41: --mp-get with --page paginates nodes within a stash\n");
+  // Test 41: --mp-get --with-nodes paginates nodes within a stash.
+  // Pagination only applies in full mode — card view never lists nodes.
+  process.stdout.write("\nTest 41: --mp-get --with-nodes paginates nodes\n");
   {
-    const r = runBig(["--mp-get", "many", "--page", "1", "--page-size", "10", "--no-color"]);
-    // Count node entries in the get output.
+    const r = runBig(["--mp-get", "many", "--with-nodes", "--page", "1", "--page-size", "10", "--no-color"]);
     const nodeCount = (r.stdout.match(/\[\d+\/\d+\]/g) ?? []).length;
     assert(nodeCount === 10, `10 nodes on page 1 of size 10 (got ${nodeCount})`);
-    assert(r.stdout.includes("page=1 of"), "mp-get shows pagination annotation");
+    assert(r.stdout.includes("page=1 of"), "mp-get --with-nodes shows pagination annotation");
+    // Card view ignores pagination flags by design.
+    const card = runBig(["--mp-get", "many", "--page", "1", "--page-size", "10", "--no-color"]);
+    assert(!/\[\d+\/\d+\]/.test(card.stdout), "card view does not list nodes");
+    assert(!card.stdout.includes("page=1 of"), "card view does not advertise pagination");
   }
 
   // Test 42: --all wins over --page (returns everything).

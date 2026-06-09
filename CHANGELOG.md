@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.2.6
+
+Field-report patch: agents recalling stashes were paying for the
+captured node bodies even when they only wanted the synthesized intel
+the stash was created to hold. Measured at ~953 tokens for a routine
+`--mp-get` vs ~150 tokens for the metadata alone — 5–6× more expensive
+than the lookup needed to be. Also surfaces the `--json` alias and
+buffs the agent-facing skill description with explicit "when NOT to
+use mdg" guidance.
+
+### Defaults & ergonomics
+
+- **`--mp-get` now defaults to a card view.** The card shows note,
+  tags, search provenance, relations, and source paths (passable as
+  `--mp-from`) but **omits the captured node bodies**. Empirically
+  5–6× cheaper in tokens for the common "what's in this stash?"
+  recall. The output advertises `view="card"` and ends with a hint
+  pointing at the opt-in.
+- **`--with-nodes` / `--full` opt back in to the legacy full dump.**
+  Both flags are synonyms; pagination (`--page` / `--page-size`)
+  applies only in that mode. Card view ignores pagination by design.
+- **MCP `mdg_get_stash` gets a new optional `with_nodes` param**
+  (default `false`). The JSON projection mirrors the CLI: card view
+  drops the `nodes` array and adds `view: "card"`, `nodes_count`,
+  and a `hint` field so the model knows the opt-in exists.
+- **`--json` is now surfaced in `--help`'s OUTPUT block.** The alias
+  has worked since 0.2.5; it was just buried.
+
+### Skill description (agent-facing)
+
+- **New "When NOT to use mdg" decision tree** at the top of
+  `skills/mdg-context/SKILL.md`. Names the cutoffs explicitly:
+  known file path → host Read; single symbol grep with ≤ ~30 hits →
+  host Grep; file under ~200 lines you'll fully consume → Read it
+  directly. The mdg startup + budgeting overhead only pays off above
+  ~1 KB of results or when persistent recall matters.
+- **New "Palace lifecycle" section** — capture → tag → link → reuse →
+  prune → close — with the load-bearing rules consolidated: TTL every
+  scratch stash, one palace per task (no cross-palace federation
+  exists; isolation is the `--mp-path` you point at), and
+  `--mp-stash-tag` is **repeatable, not comma-separated** (`"scan,topic"`
+  becomes one literal tag).
+- **Documented actual `--mp-graph` traversal semantics**: depth 1 is
+  bidirectional, depth ≥ 2 follows outbound only, BFS dedup hides
+  parallel paths to the same target. If you suspect a relationship the
+  graph isn't surfacing, fall back to `--mp-related` on the target.
+- **Truncation note**: stashing a truncated search inherits the
+  partial node set; the `mdg: created stash …` line doesn't restate
+  the truncation, so when stashing for archival, drop or raise
+  `--max-tokens` rather than relying on the search-level marker alone.
+
+### Compatibility
+
+- Existing CLI scripts that depended on the old full-node output of
+  `--mp-get` must add `--with-nodes` or `--full`. The new behavior is
+  cheaper-by-default, so the recommended migration is to leave the
+  flag off unless you really need node bodies.
+- MCP clients calling `mdg_get_stash` without `with_nodes` will get
+  the card-view JSON shape (no `nodes` array). Same migration:
+  request `with_nodes: true` only when needed.
+
 ## 0.2.5
 
 Perf pass driven by a benchmark that revealed `mdg "import" --in .

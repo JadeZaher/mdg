@@ -156,10 +156,19 @@ async function main(): Promise<number> {
     return 0;
   }
   if (config.mind_palace?.get) {
-    const stash = getStash(palace, config.mind_palace.get);
+    const { name: stashName, with_nodes: withNodes } = config.mind_palace.get;
+    const stash = getStash(palace, stashName);
     if (!stash) {
-      process.stderr.write(`mdg: no such stash: ${config.mind_palace.get}\n`);
+      process.stderr.write(`mdg: no such stash: ${stashName}\n`);
       return 4;
+    }
+    // Card view (default) skips the captured nodes entirely — much
+    // cheaper for the common "what's in this stash?" lookup. Pass
+    // --with-nodes (or --full) to recover the previous behavior.
+    if (!withNodes) {
+      process.stdout.write(formatPalaceGet(stash, palacePath, config.color, undefined, false));
+      process.stdout.write("\n");
+      return 0;
     }
     const { items: pagedNodes, pagination } = paginate(stash.nodes, {
       page: config.page,
@@ -167,7 +176,7 @@ async function main(): Promise<number> {
       all: config.all,
     });
     const pagedStash: Stash = { ...stash, nodes: pagedNodes };
-    process.stdout.write(formatPalaceGet(pagedStash, palacePath, config.color, pagination));
+    process.stdout.write(formatPalaceGet(pagedStash, palacePath, config.color, pagination, true));
     process.stdout.write("\n");
     return 0;
   }
