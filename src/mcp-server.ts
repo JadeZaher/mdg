@@ -54,7 +54,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse> {
         result: {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "mpg", version: "0.3.3" },
+          serverInfo: { name: "mpg", version: "0.3.4" },
         },
       };
 

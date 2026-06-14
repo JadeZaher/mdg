@@ -54,7 +54,7 @@ import { buildFuzzyRegex, verifyFuzzy } from "./fuzzy.js";
 import type { Node, ResolvedConfig, Result, Source } from "./types.js";
 import type { Stash } from "./mind-palace.js";
 
-const VERSION = "0.3.3";
+const VERSION = "0.3.4";
 
 // Fuzzy matching is now in ./fuzzy.ts (trigram-union regex + Levenshtein
 // post-filter; handles drop/insert/substitute/swap up to edit distance 2).
