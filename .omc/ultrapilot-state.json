@@ -1,20 +1,13 @@
 {
   "active": true,
-  "mode": "swarm-fanout",
-  "task": "tackle 'What's missing' items in BENCHMARKS.md + run live macro bench",
-  "branch": "bench",
-  "starting_commit": "64c0318",
+  "mode": "ultrapilot",
   "phase": "parallel_execution",
-  "background_jobs": [
-    {"id": "bj1y8k1vg", "kind": "bash", "task": "live macro bench run with API key", "status": "running"},
-    {"id": "aeee70e9e34606a6f", "kind": "swarm_worker_A", "task": "bench/multiturn — multi-session memory recall", "status": "running", "files": ["bench/multiturn/**"]},
-    {"id": "a5572977c8eb853e1", "kind": "swarm_worker_B", "task": "bench/semantic — paraphrased queries; embedding lift vs regex on no-literal queries", "status": "running", "files": ["bench/semantic/**"]},
-    {"id": "a7e6cdd8ef2a60dcb", "kind": "swarm_worker_C", "task": "bench/conversational/{chunking,embed-chunked,run-chunked}.ts — per-event JSONL chunking for embeddings", "status": "running", "files": ["bench/conversational/chunking.ts", "bench/conversational/embed-chunked.ts", "bench/conversational/run-chunked.ts"]}
+  "task": "MPG handoff plan items 1-5",
+  "workers": [
+    {"id": "w1", "status": "running", "files": ["README.md", "BENCHMARKS.md", "CHANGELOG.md"], "task": "Reconcile 67/56 discrepancy; add caveats"},
+    {"id": "w2", "status": "running", "files": ["src/mind-palace.ts", "src/palace-format.ts"], "task": "Stash staleness markers"},
+    {"id": "w3", "status": "running", "files": ["src/server.ts (new)", "src/tool-spec.ts (new)"], "task": "Warm-process serve + tool-spec descriptors"},
+    {"id": "w4", "status": "running", "files": ["src/format.ts", "src/cli.ts"], "task": "agent-json envelope, --no-fill, --serve wiring, tool-spec cmd, --help example, Windows pipe"}
   ],
-  "coordinator_followup": [
-    "aggregate.ts — add multiturn / semantic / conversational-chunked sections; remove macro/multiturn/semantic from 'What's missing'",
-    "package.json — add bench:multiturn / bench:semantic / bench:conv-chunked scripts to the bench chain",
-    "BENCHMARKS.md — regenerate"
-  ],
-  "shared_files": ["package.json", "bench/aggregate.ts"]
+  "shared_files": ["package.json", "src/types.ts"]
 }

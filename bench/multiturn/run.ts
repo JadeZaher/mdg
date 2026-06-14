@@ -168,11 +168,14 @@ async function runOne(
     const result = await agent.runAgent({
       taskPrompt,
       arm,
-      // Lower than before. 30 turns × 100k input tokens was too generous —
-      // a stuck scenario could spend $$$. 15 turns × 60k is plenty for
-      // 3-4 related questions to be answered.
+      // 100k input cap. The earlier 60k cap was tight enough that nearly
+      // every cell hit it before scoring (5/6 in 2026-06-08, 6/6 in
+      // 2026-06-12), which collapses the experiment — treatment can't
+      // show its leverage if both arms time out on budget. 100k matches
+      // the original design and comfortably fits granite-4-h-tiny's
+      // context window for the local-model runs.
       maxTurns: 15,
-      maxInputTokens: 60_000,
+      maxInputTokens: 100_000,
       modelId: modelId || undefined,
       palacePath,
       cwd: FRACTAL_ROOT,

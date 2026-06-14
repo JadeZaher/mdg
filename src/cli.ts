@@ -96,6 +96,16 @@ export interface RawArgs {
   fuzzy: boolean;
   help: boolean;
   version: boolean;
+  // --serve / --serve-http mode: skip search, start warm-process server.
+  serve: boolean;
+  serveHttp: boolean;
+  servePort?: number;
+  serveHost?: string;
+  // --no-fill: strict mode — do not pad results to max_nodes.
+  noFill: boolean;
+  // tool-spec subcommand detected by positional "tool-spec".
+  toolSpec: boolean;
+  toolSpecFormat?: "openai" | "anthropic" | "gemini";
   // Subprocess-friendly entry: prints the resolved JS entry path and exits.
   // Lets Node callers do `spawn(process.execPath, [entry, ...args])` and
   // skip the .cmd shim that breaks on Windows when invoked from a child
@@ -342,7 +352,56 @@ EXAMPLES
 
   # Markdown for pasting into a doc or chat
   mpg "TODO" --in src/ --format markdown
+
+  # Agent-loop envelope (status, warnings, fallback info)
+  mpg "TODO" --in src/ --format agent-json
+
+  # Strict mode: return only matched nodes, no fill padding
+  mpg "TODO" --in src/ --no-fill
+
+SERVE MODE (warm-process — eliminates ~1.1 s Node cold-start)
+      --serve               Start NDJSON stdio server and await (no search run).
+      --serve-http          Start HTTP server (implies --serve).
+      --port <n>            Port for --serve-http (default: 17317).
+      --host <addr>         Bind address for --serve-http (default: 127.0.0.1).
+
+SUBCOMMANDS
+  tool-spec [--format openai|anthropic|gemini]
+                            Print the mpg JSON tool descriptor for the given
+                            provider format (default: openai) and exit.
+
+AGENT LOOP EXAMPLE (warm-process mode):
+
+  # 1. Start the server
+  mpg --serve --serve-http --port 17317 &
+
+  # 2. From your agent:
+  curl -s http://localhost:17317/ -d '{"method":"search","params":{"pattern":"auth","sources":["./src"],"format":"agent-json"}}'
+
+  # 3. Dump tool descriptors for OpenAI / Anthropic / Gemini:
+  mpg tool-spec --format anthropic > tools.json
 `;
+
+/**
+ * Windows .cmd shim pipe-escape integration point.
+ *
+ * When mpg is invoked via the npm-installed .cmd shim on Windows, cmd.exe
+ * interprets `|` in argv as a shell pipe, breaking regex patterns.
+ * The shim (follow-up PR) sets MPG_PATTERN_NEEDS_UNESCAPE=1 and wraps the
+ * pattern in double quotes. Here we strip those surrounding quotes so the
+ * pattern reaches rg intact.
+ *
+ * This is an explicit opt-in — no false positives without the env marker.
+ */
+function maybeUnescapePattern(raw: string): string {
+  if (process.platform === "win32" && process.env.MPG_PATTERN_NEEDS_UNESCAPE === "1") {
+    // Strip a single layer of surrounding double-quotes if present.
+    if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+      return raw.slice(1, -1);
+    }
+  }
+  return raw;
+}
 
 export function parseArgs(argv: string[]): RawArgs {
   const args: RawArgs = {
@@ -377,6 +436,10 @@ export function parseArgs(argv: string[]): RawArgs {
     help: false,
     version: false,
     printEntry: false,
+    serve: false,
+    serveHttp: false,
+    noFill: false,
+    toolSpec: false,
   };
 
   let i = 0;
@@ -442,8 +505,16 @@ export function parseArgs(argv: string[]): RawArgs {
     }
     if (a === "-f" || a === "--format") {
       const v = requireValue(a, argv, ++i);
-      if (!["llm", "markdown", "json", "text"].includes(v)) {
-        throw new Error(`--format must be llm|markdown|json|text, got: ${v}`);
+      // Within a tool-spec subcommand, --format selects the provider descriptor.
+      if (args.toolSpec) {
+        if (!["openai", "anthropic", "gemini"].includes(v)) {
+          throw new Error(`tool-spec --format must be openai|anthropic|gemini, got: ${v}`);
+        }
+        args.toolSpecFormat = v as "openai" | "anthropic" | "gemini";
+        i++; continue;
+      }
+      if (!["llm", "markdown", "json", "text", "agent-json"].includes(v)) {
+        throw new Error(`--format must be llm|markdown|json|text|agent-json, got: ${v}`);
       }
       args.format = v as OutputFormat; i++; continue;
     }
@@ -591,15 +662,34 @@ export function parseArgs(argv: string[]): RawArgs {
     }
     if (a === "--fuzzy") { args.fuzzy = true; i++; continue; }
     if (a === "--ls" || a === "--tree") { args.ls = true; i++; continue; }
+
+    // Server mode.
+    if (a === "--serve") { args.serve = true; i++; continue; }
+    if (a === "--serve-http") { args.serve = true; args.serveHttp = true; i++; continue; }
+    if (a === "--port") { args.servePort = parseInt(requireValue(a, argv, ++i), 10); i++; continue; }
+    if (a === "--host") { args.serveHost = requireValue(a, argv, ++i); i++; continue; }
+
+    // Strict / no-fill mode.
+    if (a === "--no-fill") { args.noFill = true; i++; continue; }
+
+    // agent-json format (alias for --format agent-json).
+    if (a === "--agent-json") { args.format = "agent-json" as OutputFormat; i++; continue; }
     if (a === "--mp-stash-locations") { args.mpStashLocations = true; i++; continue; }
 
-    // Positional: first non-flag is the pattern. Any subsequent
-    // non-flag args are treated as input paths (like `rg`).
+    // Positional: first non-flag is the pattern or a subcommand.
+    // "tool-spec" is a subcommand, not a search pattern.
     if (!a.startsWith("-") && args.pattern === undefined) {
-      args.pattern = a;
+      if (a === "tool-spec") {
+        args.toolSpec = true;
+        i++;
+        // Optional --format flag may follow; continue parsing.
+        continue;
+      }
+      args.pattern = maybeUnescapePattern(a);
       i++;
       continue;
     }
+
     if (!a.startsWith("-") && args.pattern !== undefined) {
       // Trailing positionals after the pattern are paths.
       for (const p of a.split(",").filter(Boolean)) {
@@ -625,6 +715,18 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
   if (raw.help) throw new HelpRequestedError();
   if (raw.version) throw new VersionRequestedError();
   if (raw.printEntry) throw new PrintEntryRequestedError();
+
+  // Subcommand: tool-spec — short-circuit before any search validation.
+  if (raw.toolSpec) throw new ToolSpecRequestedError(raw.toolSpecFormat ?? "openai");
+
+  // Server mode — short-circuit before any search validation.
+  if (raw.serve) {
+    throw new ServeRequestedError(
+      raw.serveHttp,
+      raw.servePort ?? 17317,
+      raw.serveHost ?? "127.0.0.1",
+    );
+  }
 
   // Pattern is optional: required for searches and for --mp-from /
   // --mp-compose, but not for --mp-list, --mp-get, or --mp-drop.
@@ -796,6 +898,7 @@ export function resolveConfig(raw: RawArgs): ResolvedConfig {
     window_curve: raw.windowCurve,
     clip_chars: raw.clipChars,
     fuzzy: raw.fuzzy,
+    no_fill: raw.noFill,
   } as ResolvedConfig;
 }
 
@@ -811,4 +914,16 @@ export class PrintEntryRequestedError extends Error {
 }
 export class VersionRequestedError extends Error {
   constructor() { super("version requested"); this.name = "VersionRequestedError"; }
+}
+export class ServeRequestedError extends Error {
+  constructor(
+    public readonly http: boolean,
+    public readonly port: number,
+    public readonly host: string,
+  ) { super("serve requested"); this.name = "ServeRequestedError"; }
+}
+export class ToolSpecRequestedError extends Error {
+  constructor(public readonly fmt: "openai" | "anthropic" | "gemini") {
+    super("tool-spec requested"); this.name = "ToolSpecRequestedError";
+  }
 }

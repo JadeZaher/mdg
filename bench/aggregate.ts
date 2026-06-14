@@ -187,8 +187,9 @@ function tldr(
     const sc = comp.summary["mpg-scan"];
     const sum = comp.summary["summarization"];
     if (sc.mean_pass_rate >= sum.mean_pass_rate) {
+      const verb = sc.mean_pass_rate > sum.mean_pass_rate ? "beats" : "matches";
       bullets.push(
-        `**Zero-LLM compaction beats LLM summarization** — \`mpg --effort scan\` ${fmtPct(sc.mean_pass_rate)} pass vs summarization's ${fmtPct(sum.mean_pass_rate)} at the same 2k-token budget, at **0 LLM input tokens** vs ${num(sum.mean_input_tokens)}.`,
+        `**Zero-LLM compaction ${verb} LLM summarization** — \`mpg --effort scan\` ${fmtPct(sc.mean_pass_rate)} pass vs summarization's ${fmtPct(sum.mean_pass_rate)} at the same 2k-token budget, at **0 LLM input tokens** vs ${num(sum.mean_input_tokens)}.`,
       );
     }
   }
@@ -225,6 +226,18 @@ function tldr(
       bullets.push(
         `**+${fmtPct(t.pass_rate - c.pass_rate)} multi-turn pass-rate lift** when the agent stashes evidence across turns (${fmtPct(c.pass_rate)} → ${fmtPct(t.pass_rate)})${inDelta < 0 ? `, at ${fmtPct(Math.abs(inDelta))} fewer input tokens` : ""}.`,
       );
+    } else if (
+      c.mean_tool_calls > 0 &&
+      t.mean_tool_calls / c.mean_tool_calls < 0.8 &&
+      t.pass_rate >= c.pass_rate
+    ) {
+      // Pass-rate parity (or small lift) but materially fewer tool calls / turns —
+      // stashing pays off in convergence cost even when scoring is noisy on n=3.
+      const toolSavings = 1 - t.mean_tool_calls / c.mean_tool_calls;
+      const turnSavings = c.mean_turns > 0 ? 1 - t.mean_turns / c.mean_turns : 0;
+      bullets.push(
+        `**${fmtPct(toolSavings)} fewer tool calls** on multi-turn scenarios when the agent stashes early findings (${t.mean_tool_calls.toFixed(1)} vs ${c.mean_tool_calls.toFixed(1)} per scenario; ${fmtPct(turnSavings)} fewer turns) at ${fmtPct(t.pass_rate)}/${fmtPct(c.pass_rate)} pass parity.`,
+      );
     }
   }
 
@@ -250,6 +263,10 @@ function tldr(
     ...bullets.map((b) => `- ${b}`),
     "",
     "Trade-offs are real (cold-start latency, single-keyword lookups, paraphrased-query recall) — they're documented in the **Wins and trade-offs** section at the bottom alongside the context for when they matter.",
+    "",
+    "## Caveats",
+    "",
+    "These results come from small per-bench sample sizes (3 compaction tasks, 3 multi-turn scenarios, 5 macro tasks) and a self-corpus drawn from the author's own projects. Compaction + macro are run against claude-haiku-4-5; multi-turn here was run against a local ibm/granite-4-h-tiny via LM Studio — different model classes test different parts of the claim. Run-to-run variance on the LLM-driven benches is high; treat pass-rate deltas as **directional signal**, not effect-size guarantees. Token-cost / wall-clock / tool-call deltas are more stable across runs. Typo-tolerance ground truth is defined by rg over the corrected literal — a mildly circular construction; the 100% claim there describes the upper bound of what fuzzy matching can recover, not a universal property.",
     "",
   ].join("\n");
 }
@@ -469,7 +486,7 @@ function whatItMeans(
     const sum = comp.summary["summarization"];
     const tr = comp.summary["truncation"];
     lines.push(
-      `- **Compaction (${(comp.tasks ?? sc.n)} topics × ${Object.keys(comp.summary).length} arms, ~2000-token budget)**: **mpg-scan (zero-LLM)** beats single-pass LLM summarization on pass-rate (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)})${tr ? ` and beats truncation (${fmtPct(tr.mean_pass_rate)})` : ""} at **zero LLM input tokens**. For "compact a topic to N tokens, then Q&A from it," \`mpg --effort scan --clip 30 --sort recent --max-tokens N\` is more reliable than spending ~${num(sum.mean_input_tokens)} tokens on summarization.`,
+      `- **Compaction (${(comp.tasks ?? sc.n)} topics × ${Object.keys(comp.summary).length} arms, ~2000-token budget)**: **mpg-scan (zero-LLM)** ${sc.mean_pass_rate > sum.mean_pass_rate ? "beats" : "matches"} single-pass LLM summarization on pass-rate (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)})${tr ? ` and beats truncation (${fmtPct(tr.mean_pass_rate)})` : ""} at **zero LLM input tokens**. For "compact a topic to N tokens, then Q&A from it," \`mpg --effort scan --clip 30 --sort recent --max-tokens N\` ${sc.mean_pass_rate > sum.mean_pass_rate ? "is more reliable than spending" : "saves"} ~${num(sum.mean_input_tokens)} tokens ${sc.mean_pass_rate > sum.mean_pass_rate ? "on summarization." : "of LLM input at parity quality."}`,
     );
     if (sc.mean_pass_rate > sum.mean_pass_rate) {
       wins.push(`**Zero-LLM compaction beats LLM summarization** at the same budget (${fmtPct(sc.mean_pass_rate)} vs ${fmtPct(sum.mean_pass_rate)} pass), at zero LLM input tokens. Use \`mpg --effort scan --clip 30 --sort recent --max-tokens N\` instead of an LLM round-trip when the goal is "compact for downstream Q&A."`);

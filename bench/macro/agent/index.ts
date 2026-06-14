@@ -19,6 +19,7 @@ import { dirname } from "node:path";
 import { getClient } from "./client.js";
 import { runLoop } from "./loop.js";
 import { getOpenRouterClient, DEFAULT_OPENROUTER_MODEL } from "./openrouter-client.js";
+import { getLMStudioClient, DEFAULT_LMSTUDIO_MODEL } from "./lmstudio-client.js";
 import { runLoopOpenAI } from "./loop-openai.js";
 import { CONTROL_TOOL_DEFS, buildControlDispatch } from "./tools-control.js";
 import {
@@ -36,10 +37,12 @@ import {
  * shared across parallel benches) and lets us run multiple LLM-driven
  * tiers concurrently without contention.
  */
-type Provider = "anthropic" | "openrouter";
+type Provider = "anthropic" | "openrouter" | "lmstudio";
 function pickProvider(): Provider {
   const v = (process.env.MPG_BENCH_PROVIDER ?? "anthropic").toLowerCase();
-  return v === "openrouter" ? "openrouter" : "anthropic";
+  if (v === "openrouter") return "openrouter";
+  if (v === "lmstudio" || v === "lm-studio" || v === "local") return "lmstudio";
+  return "anthropic";
 }
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -181,7 +184,9 @@ export async function runAgent(opts: RunOptions): Promise<RunOutput> {
   const maxInputTokens = opts.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
   const modelId =
     opts.modelId ??
-    (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : DEFAULT_MODEL);
+    (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL
+      : provider === "lmstudio" ? DEFAULT_LMSTUDIO_MODEL
+      : DEFAULT_MODEL);
   const cwd = opts.cwd ?? REPO_ROOT;
   const palacePath = opts.palacePath;
   const onProgress = opts.onProgress;
@@ -206,8 +211,10 @@ export async function runAgent(opts: RunOptions): Promise<RunOutput> {
   let finalText = "";
   let hitCap: "turns" | "input_tokens" | "none" = "none";
 
-  if (provider === "openrouter") {
-    const client = await getOpenRouterClient();
+  if (provider === "openrouter" || provider === "lmstudio") {
+    const client = provider === "lmstudio"
+      ? await getLMStudioClient()
+      : await getOpenRouterClient();
     const r = await runLoopOpenAI({
       client,
       modelId,

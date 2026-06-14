@@ -462,13 +462,23 @@ function mpgDropStashImpl(
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-export const TREATMENT_MPG_SCHEMAS: Tool[] = [
+import { mergeToolSpec } from "./tool-spec-loader.js";
+
+const HAND_ROLLED_MPG_SCHEMAS: Tool[] = [
   mpgSearchSchema,
   mpgStashSchema,
   mpgListStashesSchema,
   mpgGetStashSchema,
   mpgDropStashSchema,
 ];
+
+/**
+ * When MPG_BENCH_USE_TOOL_SPEC=1 is set, schemas with the same name as
+ * `mpg tool-spec --format anthropic` output are replaced by the spec
+ * version (canonical published descriptors). Hand-rolled stays as the
+ * default for reproducibility of prior bench runs.
+ */
+export const TREATMENT_MPG_SCHEMAS: Tool[] = mergeToolSpec(HAND_ROLLED_MPG_SCHEMAS);
 
 export const ALL_TREATMENT_SCHEMAS: Tool[] = [
   ...CONTROL_TOOL_DEFS.map((d) => d.schema),

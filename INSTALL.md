@@ -6,14 +6,16 @@ the agent executes tools:
 | Agent | Integration path | Difficulty |
 | :--- | :--- | :--- |
 | **Claude Desktop** | MCP server | Easy |
-| **Claude API** | `claudeTools` import | Easy |
-| **Gemini API / Studio** | `geminiTools` import | Easy |
-| **Pi Agent** | SKILL.md + CLI | Easy |
+| **Claude Code** | MCP server + optional PreCompact hook | Easy |
+| **Claude API** | `claudeTools` import or `mpg tool-spec --format anthropic` | Easy |
+| **Gemini API / Studio** | `geminiTools` import or `mpg tool-spec --format gemini` | Easy |
+| **Pi Agent** | SKILL.md + CLI + long-horizon memory patterns | Easy |
 | **Cline** (VS Code) | MCP server | Easy |
 | **Windsurf** | MCP server | Easy |
 | **Cursor** | Shell command or MCP | Medium |
 | **Aider** | `/run` command | Easy |
 | **Continue.dev** | MCP server | Easy |
+| **Any harness with many mpg calls** | `mpg --serve` (stdio or HTTP warm-process mode) | Easy |
 | **Any agent that can shell out** | `npm install -g mind-palace-graph` | Trivial |
 
 ---
@@ -33,6 +35,141 @@ cd mind-palace-graph && npm install && npm run build && npm link
 mpg --version
 mpg --help
 ```
+
+---
+
+## Warm-process mode (avoid Node cold-start)
+
+### The problem
+
+Every `mpg` CLI invocation pays roughly 1.1 s of Node.js + module-load
+overhead before a single byte of ripgrep output is produced. For an
+interactive one-off search that is invisible. For an agent harness making
+many calls per task it compounds fast: a 20-episode benchmark at 5
+`mpg` calls per episode burns ~110 s in pure boot — about as long as
+the actual work.
+
+### The fix: `mpg --serve`
+
+Run mpg once as a long-lived server; all subsequent calls skip the boot
+entirely. Two transport modes:
+
+#### Stdio mode (best when the agent spawns mpg as its own child)
+
+```bash
+mpg --serve
+```
+
+Reads newline-delimited JSON from stdin, writes newline-delimited JSON
+to stdout. One request per line in; one response per line out.
+
+Request envelope:
+
+```json
+{ "id": "req-1", "method": "search", "params": { "pattern": "TODO", "in": "src/", "max_tokens": 2000 } }
+```
+
+Response envelope (success):
+
+```json
+{ "id": "req-1", "result": { "status": "ok", "nodes": [ ... ] } }
+```
+
+Response envelope (error):
+
+```json
+{ "id": "req-1", "error": { "message": "pattern required" } }
+```
+
+From a Node extension, spawn once and write NDJSON requests instead of
+re-spawning for each call:
+
+```ts
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import { entryPath } from "mind-palace-graph/entry";
+
+const server = spawn(process.execPath, [entryPath, "--serve"], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+
+const rl = createInterface({ input: server.stdout });
+const pending = new Map<string, (r: unknown) => void>();
+
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  pending.get(msg.id)?.(msg.result ?? msg.error);
+  pending.delete(msg.id);
+});
+
+function call(method: string, params: object): Promise<unknown> {
+  return new Promise((resolve) => {
+    const id = crypto.randomUUID();
+    pending.set(id, resolve);
+    server.stdin.write(JSON.stringify({ id, method, params }) + "\n");
+  });
+}
+
+// Usage — no Node cold-start after the first spawn:
+const result = await call("search", { pattern: "TODO", in: "src/", max_tokens: 2000 });
+```
+
+#### HTTP mode (best for a shared local daemon or multi-process setup)
+
+```bash
+mpg --serve --serve-http --port 17317
+```
+
+- `POST /` with `Content-Type: application/json`, body `{ "method": "<name>", "params": { ... } }`.
+- `GET /health` returns `{ "ok": true, "version": "<semver>", "palace_path": "<abs-path>" }`.
+
+```bash
+# Health check
+curl http://127.0.0.1:17317/health
+
+# Search
+curl -s http://127.0.0.1:17317/ \
+  -H "Content-Type: application/json" \
+  -d '{"method":"search","params":{"pattern":"TODO","in":"src/","max_tokens":2000}}'
+
+# List stashes
+curl -s http://127.0.0.1:17317/ \
+  -d '{"method":"palace.list"}'
+```
+
+#### Available methods (both transports)
+
+| Method | Description |
+| :--- | :--- |
+| `search` | Token-budgeted search (mirrors all CLI search flags) |
+| `palace.list` | List stashes, optionally filtered by tag |
+| `palace.get` | Get one stash by name |
+| `palace.stash` | Save a result set as a named stash |
+| `palace.drop` | Remove a stash |
+| `palace.compose` | Union two or more stashes |
+| `palace.intersect` | Intersection of two stashes |
+| `palace.except` | Set-difference of two stashes |
+| `palace.link` | Add a directed edge between stashes |
+| `palace.graph` | Reconstruct the stash graph from a root |
+| `palace.prune_expired` | Drop stashes whose TTL has elapsed |
+| `palace.prune_tag` | Drop all stashes with a given tag |
+| `palace.prune_older_than` | Drop stashes older than a duration |
+| `palace.prune_keep` | Keep only the N most recent stashes |
+| `tool_spec` | Return tool JSON schema (for agent harness bootstrap) |
+| `health` | Return `{ ok, version, palace_path }` |
+
+Param names use **snake_case** and mirror CLI flag names exactly:
+`max_tokens`, `clip`, `window_curve`, `mp_stash_tag`, `mp_ttl`, etc.
+
+#### Should I use stdio or HTTP?
+
+- **Stdio**: the agent controls the lifecycle — it spawns mpg as a
+  child process and kills it with the session. Zero config, zero port
+  allocation, works inside containers and sandboxes. Prefer this.
+- **HTTP**: multiple processes or containers need the same daemon, or
+  you want a persistent background daemon that outlives a single agent
+  session. Fire `mpg --serve --serve-http` once (e.g. in a dev
+  `Procfile` or `docker-compose.yml`) and point all callers at it.
 
 ---
 
@@ -66,9 +203,9 @@ behaviors you can rely on.
      (`--mp-ttl 4h` scratch, `--mp-ttl 24h` findings), prune by tag
      between phases, one palace per task via `MPG_MIND_PALACE`.
    - **On-demand file summarization** — `--in <file> --effort deep`
-     for a single file, `--in <dir> --effort scan --clip-chars 30
+     for a single file, `--in <dir> --effort scan --clip 30
      --max-tokens N` for an area.
-   - **Cross-stack "does X exist?"** — `--effort scan --clip-chars 20
+   - **Cross-stack "does X exist?"** — `--effort scan --clip 20
      --json` for the cheapest possible attribution check.
    - **Filtering opaque tool output / web fetches** — `mpg --cmd
      "..."` or `mpg --url "..."` to extract only the lines that match
@@ -104,6 +241,33 @@ This is the difference between mpg being installed and mpg being
 **used.** Without the workflow guidance, future sessions will reach
 for raw grep + read every time and lose the token-budget and
 cross-session memory wins entirely.
+
+---
+
+## Generating tool schemas at install time (`mpg tool-spec`)
+
+If you are building a harness that registers mpg as a tool via the
+provider's function-calling API, you don't need to hand-write the JSON
+Schema. Generate it at install time:
+
+```bash
+# Anthropic / Claude API format
+mpg tool-spec --format anthropic > tools/mpg-anthropic.json
+
+# OpenAI / compatible format
+mpg tool-spec --format openai > tools/mpg-openai.json
+
+# Gemini format
+mpg tool-spec --format gemini > tools/mpg-gemini.json
+```
+
+Then load the file in your harness instead of inlining schema by hand.
+The generated schema stays in sync with the installed version of mpg —
+re-run this command after upgrading.
+
+Each provider subsection below shows a TypeScript import path for
+zero-bundle harnesses; `mpg tool-spec` is the path for anything that
+wants a static JSON file or uses a language other than TypeScript.
 
 ---
 
@@ -152,6 +316,9 @@ and pagination.
 
 ## Claude API (tool_use)
 
+> **Static JSON alternative:** `mpg tool-spec --format anthropic > tools/mpg-anthropic.json`
+> (see "Generating tool schemas at install time" above).
+
 Import the pre-built tool definitions:
 
 ```ts
@@ -182,9 +349,83 @@ if (block.type === "tool_use") {
 The `claudeTools` array is already shaped for Claude's API (each entry
 has `type: "function"` and `function: { name, description, parameters }`).
 
+### Claude Code PreCompact hook (snapshot before compaction)
+
+Claude Code supports a `PreCompact` hook in `~/.claude/settings.json`
+(or the project-local `.claude/settings.json`). The hook fires just
+before the conversation is compacted — the perfect moment to crystallize
+working memory into mpg stashes that survive the lossy compaction.
+
+**Copy-pasteable hook config:**
+
+```jsonc
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mpg --mp-prune-expired && mpg --mp-list --json > .mpg/precompact-snapshot.json"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This does two things on every compaction:
+
+1. **Prunes expired stashes** — drops anything whose `--mp-ttl` has
+   elapsed, so scratch scan-stashes are gone before the snapshot is
+   written.
+2. **Snapshots the palace state** to `.mpg/precompact-snapshot.json`
+   so you have an on-disk record of what survived (useful for
+   debugging; not required for the workflow).
+
+**The recommended TTL discipline that makes this work:**
+
+| Stash kind | TTL | Tag | Survives compaction? |
+| :--- | :--- | :--- | :--- |
+| Exploratory scan | `--mp-ttl 4h` | `scan` | No — pruned before snapshot |
+| Confirmed finding | `--mp-ttl 24h` | `finding` | Yes |
+| Canonical context | _(no TTL)_ | `canonical` | Yes, always |
+
+Tag and TTL every stash at creation time. Then the PreCompact prune
+drops scratch automatically and keeps what matters. See
+`skills/mpg-context/SKILL.md` for the full recurring-jobs reference.
+
+**After compaction — the compacted assistant's first move:**
+
+```bash
+# See what stashes survived
+mpg --mp-list
+
+# Recall a specific finding
+mpg --mp-get refactor-auth-flow
+```
+
+Because stash nodes include `file:line` attribution and the
+budget-bounded match text, the compacted session gets back the
+relevant evidence without re-scanning the codebase.
+
+**If the warm-process HTTP daemon is running locally**, point the
+hook at it for zero-cost prune firing (no Node cold-start):
+
+```jsonc
+{
+  "type": "command",
+  "command": "curl -s http://127.0.0.1:17317/ -H \"Content-Type: application/json\" -d '{\"method\":\"palace.prune_expired\"}' > /dev/null"
+}
+```
+
 ---
 
 ## Gemini API / Google AI Studio
+
+> **Static JSON alternative:** `mpg tool-spec --format gemini > tools/mpg-gemini.json`
+> (see "Generating tool schemas at install time" above).
 
 Import the Gemini-compatible definitions:
 
@@ -249,6 +490,13 @@ For regexes that might contain shell metacharacters, write the
 pattern to a temp file and pass `--pattern-file <path>` instead of
 the positional argument. See "Calling mpg from Node subprocesses
 (Windows-safe)" below for the full recipe.
+
+When calling mpg repeatedly from a Pi extension, prefer `--serve`
+stdio mode: spawn the process once and write NDJSON requests over
+stdin rather than re-spawning for each call. This collapses the
+~1.1 s Node boot cost to a single up-front payment for the session
+(see "Warm-process mode" above).
+
 
 ---
 
@@ -365,7 +613,7 @@ mpg "auth|login" --in . --effort quick --format json
 mpg "session" --in src/ --effort deep --format json
 
 # Stash for later
-mpg "TODO" --in src/ --mp-stash my-todos "My TODO findings" --mp-tag review
+mpg "TODO" --in src/ --mp-stash my-todos "My TODO findings" --mp-stash-tag review
 
 # Compose stashes
 mpg "TODO" --mp-compose stash-a stash-b --format json
@@ -473,7 +721,7 @@ ports, no configuration beyond the `command` and `args` in the MCP config.
 ```bash
 # After installing, verify the agent can find mpg:
 which mpg         # should show the path
-mpg --version     # should print a current version (e.g. "mpg 0.3.0")
+mpg --version     # should print a current version (e.g. "mpg 0.3.x")
 mpg --ls          # should list files in the current directory
 
 # Quick search test:

@@ -13,9 +13,9 @@
  */
 
 import type { Stash } from "./mind-palace.js";
+import { computeNodeStaleness, formatRelativeTime } from "./mind-palace.js";
 import type { PaginationMeta } from "./pagination.js";
 import { paginationAnnotation, paginationTextNote } from "./pagination.js";
-import { formatRelativeTime } from "./mind-palace.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -116,8 +116,17 @@ export function formatPalaceGet(
     out.push("--- NODES ---");
     for (let i = 0; i < stash.nodes.length; i++) {
       const n = stash.nodes[i];
+      // Compute staleness at render time so callers always see current state.
+      const staleness = computeNodeStaleness(n);
       out.push("");
-      out.push(`[${i + 1}/${stash.nodes.length}] ${c(useColor, BOLD + FG_CYAN, n.source)}:${n.match_line}  (~${n.tokens}t)`);
+      let nodeHeader = `[${i + 1}/${stash.nodes.length}] ${c(useColor, BOLD + FG_CYAN, n.source)}:${n.match_line}  (~${n.tokens}t)`;
+      if (staleness.stale === true) {
+        const reason = staleness.stale_reason ?? "stale";
+        nodeHeader += c(useColor, FG_YELLOW, `  [STALE: ${reason}]`);
+      } else if (staleness.stale === "unknown") {
+        nodeHeader += c(useColor, DIM, "  [freshness: unknown]");
+      }
+      out.push(nodeHeader);
       // Show the captured context window.
       const width = String(n.end_line).length;
       for (let j = 0; j < n.context_before.length; j++) {

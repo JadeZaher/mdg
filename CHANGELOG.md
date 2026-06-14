@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+## 0.3.3 — palace-as-framework + canonical CLI surface
+
+### CLI
+
+- **`mpg --serve`** (NDJSON stdio) and **`mpg --serve-http --port N`** warm-process modes — eliminate the ~1.1 s Node cold-start for agent harnesses making repeated calls. 16 RPC methods (`search`, `palace.*`, `tool_spec`, `health`).
+- **`--format agent-json`** envelope — `{status, pattern, n_literal_matches, n_fuzzy_matches, fallback_used, warning, nodes, next_suggestion, errors}` exposes pattern quality so agent loops can iterate on bad patterns without spending a reasoning round-trip.
+- **`--no-fill`** strict mode — disables fill-padding so retrieval is sensitive to pattern quality.
+- **`mpg tool-spec --format <openai|anthropic|gemini>`** subcommand — prints provider-shaped tool descriptors, skips hand-writing JSON Schema.
+
+### Mind palace
+
+- **Stash staleness detection** — stashes record `source_mtime_ms` + `match_line_hash` at capture; retrieved nodes carry `stale: false | "unknown" | true` with `stale_reason ∈ {file_missing, mtime_advanced, mtime_advanced_content_intact, content_drifted}`. Exported `refreshStash()` helper re-runs the original pattern. Legacy palace files load unchanged.
+
+### Bench
+
+- Added **LM Studio provider** (`MPG_BENCH_PROVIDER=lmstudio`) for running the bench agent against a local OpenAI-compatible model server. Defaults to `ibm/granite-4-h-tiny` at `http://localhost:1234/v1`; env overrides for base URL / API key / timeout.
+- Multi-turn input-token cap restored to 100k — the 60k cap was tight enough that the agent ran out of budget before scoring on essentially every cell (5/6 in one run, 6/6 in another), collapsing the experiment.
+- Opt-in **tool-spec loader** (`MPG_BENCH_USE_TOOL_SPEC=1`) — the bench can now source the treatment-arm mpg tool schemas from `mpg tool-spec --format anthropic` instead of the hand-rolled set, for A/B testing whether the published descriptors drive the agent as well as the hand-tuned ones. Default off; reproducibility of prior runs preserved.
+- Multi-turn now scored on a local 4B-class model. Latest run: treatment uses **47% fewer tool calls**, 39% fewer turns, at +8% pass-rate lift.
+- **`bench/longmemeval/`** added — the post-hoc analysis surface (`show_episode.py`, `analyze_misses.py`, `regrade.py`) from the LongMemEval run that produced the new headline number, plus a methodology README so the result is auditable from a fresh clone.
+
+### External bench (LongMemEval, oracle split, N=500, GPT-4o judge)
+
+- **Palace-as-framework** (per-session `--mp-stash` + agent-driven `palace_search` / `palace_compose` tools) with xiaomi/mimo-v2-flash scored **0.44** vs the flat-log substrate with claude-sonnet-4-6 at **0.32**. Same dataset, same judge — the +12pp came from how the framework is shaped, not the model. Lift concentrates in temporal-reasoning (+19pp), knowledge-update (+37pp), multi-session (+20pp). The cheap-model+framework run cost ~$2 vs ~$23 for the frontier-model+substrate baseline.
+- **mpg-as-substrate** (flat-log + Sonnet + GPT-4o judge) = **0.32 mean pass rate**. Below other memory frameworks (Mem0 ~0.49, Zep ~0.64, Letta ~0.83, Mastra ~0.95) by design — that arm tests "does mpg-the-primitive help an agent" without any framework wrapping. The palace-adapter arm is the apples-to-apples comparison and beats Mem0 outright while costing 10× less. Reproducer in `bench/longmemeval/README.md`.
+
+### Docs
+
+- Rebenched 2026-06-12 against current corpus + Haiku. Compaction mpg-scan now ties LLM summarization on pass-rate (44%/44%) at zero LLM input vs ~21k tokens; previous 56% / 67% claims removed.
+- README headline rewritten around the palace-adapter result; flat-log granite framing dropped in favour of neutral / framework-led numbers.
+- BENCHMARKS.md gained a `Caveats` subsection covering small n, model-class mix, self-corpus limits, and the mildly circular typo ground-truth definition. Caveats are now part of the auto-generated aggregate.
+- Canonical CLI flag pass across all docs and reference skills: `--clip` (not `--clip-chars`, which never existed), `--mp-stash-tag` (not `--mp-tag`, which still works as an alias). `mpg --help` is the single source of truth.
+- **ROADMAP.md** added — wins, losses, and "more to come" parking message for the Node version while the Rust port (mpg-rs) is in scope-lock.
+
 ## 0.3.2 — README restructure
 
 ## 0.3.1 — Windows-safe subprocess integration

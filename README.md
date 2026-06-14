@@ -14,6 +14,14 @@ Plus a persistent **mind palace** — named, addressable stashes of
 search results that compose, intersect, prune, and form a graph. mpg
 is how agents browse and trim long-term memory, not just how they grep.
 
+New in recent versions: **warm-process server** (`mpg --serve` stdio /
+`--serve-http`) eliminates the ~1.1 s Node cold-start for harnesses
+making many calls. **`--format agent-json`** adds a structured envelope
+(`status`, `n_literal_matches`, `warning`, `errors`) so agent loops
+can detect bad patterns without paying an LLM round-trip. **`mpg
+tool-spec --format <openai|anthropic|gemini>`** prints provider-shaped
+tool descriptors at install time — no hand-written JSON schemas.
+
 ## Headline numbers vs alternatives
 
 Pulled from the in-repo benchmark suite (`bench/` + [`BENCHMARKS.md`](./BENCHMARKS.md)).
@@ -22,8 +30,9 @@ Pulled from the in-repo benchmark suite (`bench/` + [`BENCHMARKS.md`](./BENCHMAR
 | :--- | :--- | :--- |
 | Literal recall on a markdown/JSON memory corpus | `--effort scan --clip 30` | 100% / 100% / **377 tokens** vs ripgrep's 1,197 — **3.2× cheaper than rg** |
 | Typo-tolerant search (drop / insert / swap / sub) | `--fuzzy` | **100%** recall vs ripgrep's 0%, ~12× cheaper than per-file embedding retrieval |
-| Topic compaction at fixed token budget | `--effort scan --clip 30 --max-tokens N` | 67% downstream-Q&A pass vs LLM summarization's 33% — at **zero LLM input tokens** |
-| Multi-turn agent convergence | `mpg_search` + `mpg_stash` | 24% fewer input tokens, **half the tool calls and turns** vs read+grep control |
+| Topic compaction at fixed token budget | `--effort scan --clip 30 --max-tokens N` | matches LLM summarization on downstream-Q&A pass-rate at the same 2k budget — at **zero LLM input tokens** vs ~21k for the LLM path (n=3 topics, claude-haiku-4-5; run-to-run variance high) |
+| Macro agent task lift | `mpg_search` + `mpg_stash` | **+20% pass-rate / -27% wall-clock** on a 5-task code+specs corpus (claude-haiku-4-5). 4% fewer turns, 7% less output reasoning at convergence. |
+| Long-horizon memory (palace-as-framework) | per-session `--mp-stash` + agent-driven `palace_search` / `palace_compose` tools | **0.44 vs 0.32** on LongMemEval oracle, N=500, GPT-4o judge — cheap-model+palace beats frontier-model+flat-log. Lift concentrates in temporal-reasoning (+19pp), knowledge-update (+37pp), multi-session (+20pp). See [`BENCHMARKS.md`](./BENCHMARKS.md). |
 | Mind palace set semantics | `--mp-compose` / `--mp-intersect` / `--mp-except` | 17/17 micro assertions pass |
 
 [`BENCHMARKS.md`](./BENCHMARKS.md) has the full scorecard and the
@@ -94,14 +103,38 @@ To pass a path that starts with `-`, prefix it with `./` (e.g.
 
 | Flag | Example | What it does |
 | :--- | :--- | :--- |
-| `-f, --format <fmt>` | `--format json` | `llm` (default), `markdown`, `json`, `text`. |
+| `-f, --format <fmt>` | `--format json` | `llm` (default), `markdown`, `json`, `text`, `agent-json`. |
 | `--json` | `--json` | Alias for `--format json` (ecosystem convention). |
 | `--color` / `--no-color` | `--no-color` | Force or disable ANSI color. Auto by default. |
+| `--no-fill` | `--no-fill` | Strict mode — disable fill-padding. Agent loops use this to force iteration on bad patterns rather than silently padding with unrelated context. |
 
 Token estimation uses a fast `chars/4` heuristic — accurate enough for
 budgeting, not a substitute for a real tokenizer when billing matters.
 The `tokens` field is always approximate and prefixed with `~` in `llm`
 format.
+
+The `agent-json` format wraps the standard result in a structured
+envelope designed for agent loops:
+
+```json
+{
+  "status": "ok",
+  "pattern": "TODO",
+  "n_literal_matches": 12,
+  "n_fuzzy_matches": 0,
+  "fallback_used": false,
+  "warning": null,
+  "nodes": [ ... ],
+  "next_suggestion": null,
+  "errors": []
+}
+```
+
+`status` is `"ok"` / `"no_matches"` / `"partial"` / `"error"`.
+`warning` and `next_suggestion` carry actionable hints when the pattern
+quality is poor. Use `--no-fill` alongside `agent-json` to disable
+fill-padding and force the agent to iterate on a bad pattern rather
+than silently accepting padded context.
 
 ### Search options (forwarded to ripgrep)
 
@@ -140,7 +173,7 @@ useful for one-palace-per-task isolation.
 | :--- | :--- | :--- |
 | `--mp-stash <name> <note>` | `mpg "TODO" --in src/ --mp-stash auth "Auth TODOs"` | Run the search, save the result under `name`. |
 | `--mp-stash-note <note>` | `--mp-stash-note "extra context"` | Set the note separately. |
-| `--mp-tag <tag>` | `--mp-tag p0 --mp-tag auth` | Tag a stash (repeatable). |
+| `--mp-stash-tag <tag>` | `--mp-stash-tag p0 --mp-stash-tag auth` | Tag a stash at capture time (repeatable). |
 | `--mp-replace` | `--mp-replace` | Overwrite an existing stash rather than merging. |
 | `--mp-ttl <duration>` | `--mp-ttl 2h` | Auto-expire this stash after the duration (e.g. `30m`, `2h`, `7d`). |
 | `--mp-list` | `mpg --mp-list` | List all stashes (with relative timestamps). |
@@ -168,6 +201,13 @@ useful for one-palace-per-task isolation.
 Expired-TTL stashes also auto-prune silently on every `--mp-list` /
 `--mp-get`.
 
+Stashes record `source_mtime_ms` and `match_line_hash` at write time.
+Retrieved nodes carry a `stale` field (`false`, `"unknown"`,
+`"mtime_advanced_content_intact"`, `"mtime_advanced"`,
+`"content_drifted"`, `"file_missing"`). Re-fetch on `content_drifted`
+or `file_missing` — drop the stash and re-run the original search. See
+`skills/mpg-context/SKILL.md` for recovery patterns.
+
 ### Relationships — make the *graph* in mind-palace-graph real
 
 | Flag | Example | What it does |
@@ -176,6 +216,38 @@ Expired-TTL stashes also auto-prune silently on every `--mp-list` /
 | `--mp-unlink <from> <to>` | `mpg --mp-unlink auth perf` | Remove a relationship. |
 | `--mp-related <name>` | `mpg --mp-related auth` | Show all stashes connected to `name` (inbound + outbound). |
 | `--mp-graph <name> [depth]` | `mpg --mp-graph auth 3` | Traversal graph from `name` up to `[depth]` (default 3). |
+
+### Warm-process server — eliminate cold-start
+
+Every CLI invocation pays ~1.1 s of Node startup. For a harness making
+many mpg calls per task this compounds fast. Run mpg once as a
+long-lived server instead:
+
+```bash
+# Stdio NDJSON (best when the agent spawns mpg as its own child)
+mpg --serve
+
+# HTTP JSON (best for a shared local daemon)
+mpg --serve --serve-http --port 17317
+```
+
+Both transports expose the same methods: `search`, `palace.*` (list,
+get, stash, drop, compose, intersect, except, link, graph,
+prune_expired, prune_tag, prune_older_than, prune_keep), `tool_spec`,
+`health`. Full wiring instructions and the NDJSON spawn snippet are in
+[INSTALL.md](./INSTALL.md) under "Warm-process mode".
+
+### Tool-spec bootstrap — generate provider schemas
+
+```bash
+mpg tool-spec --format anthropic > tools/mpg-anthropic.json
+mpg tool-spec --format openai   > tools/mpg-openai.json
+mpg tool-spec --format gemini   > tools/mpg-gemini.json
+```
+
+Generates provider-shaped tool descriptors at install time. Re-run
+after upgrading. See [INSTALL.md](./INSTALL.md) for per-provider
+wiring into a function-calling harness.
 
 ### Discovery & meta
 
@@ -186,6 +258,8 @@ Expired-TTL stashes also auto-prune silently on every `--mp-list` /
 | `-v, --version` | `mpg --version` | Print version. |
 | `--print-entry` | `mpg --print-entry` | Print the resolved JS entry path (`dist/index.js`) and exit. For Node subprocess callers — see [Calling mpg from another process](#calling-mpg-from-another-process). |
 | `--pattern-file <path>` | `mpg --pattern-file /tmp/p --in src/` | Read the regex from a file (trailing newline stripped). Mutually exclusive with the positional pattern. Keeps exotic regexes off argv. |
+| `--serve` | `mpg --serve` | Start a warm-process stdio NDJSON server. Eliminates ~1.1 s cold-start for harnesses making many calls. |
+| `--serve-http --port <n>` | `mpg --serve --serve-http --port 17317` | HTTP JSON mode. `POST /` with `{ method, params }`. `GET /health` returns status. |
 
 ### Environment variables
 
@@ -235,7 +309,7 @@ cat README.md | mpg "install"
 
 # Stash + tag + TTL
 mpg "TODO" --in src/auth/ --mp-stash auth-todos "Auth TODOs" \
-  --mp-tag auth --mp-tag p0 --mp-ttl 7d
+  --mp-stash-tag auth --mp-stash-tag p0 --mp-ttl 7d
 
 # Compose two stashes, re-search across their union
 mpg "error" --mp-compose auth-todos perf-hotspots
@@ -256,6 +330,15 @@ MPG_MIND_PALACE=./.mpg/task-42.json mpg "TODO" --in src/ --mp-stash t42 "..."
 
 # Programmatic JSON for a harness
 mpg "TODO" --in src/ --format json --page 1 --page-size 5
+
+# Agent-loop envelope — detect bad patterns before paying an LLM round-trip
+mpg "TODO" --in src/ --format agent-json --no-fill
+
+# Warm-process server (stdio) — spawn once, write NDJSON requests over stdin
+mpg --serve
+
+# Generate provider tool schemas at install time
+mpg tool-spec --format anthropic > tools/mpg-anthropic.json
 ```
 
 ## Output format: `llm`

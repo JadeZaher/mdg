@@ -46,13 +46,15 @@ import {
   HelpRequestedError,
   PrintEntryRequestedError,
   VersionRequestedError,
+  ServeRequestedError,
+  ToolSpecRequestedError,
 } from "./cli.js";
 import { sampleMedianLineLength, WIDE_RECORD_MEDIAN_THRESHOLD } from "./api.js";
 import { buildFuzzyRegex, verifyFuzzy } from "./fuzzy.js";
 import type { Node, ResolvedConfig, Result, Source } from "./types.js";
 import type { Stash } from "./mind-palace.js";
 
-const VERSION = "0.3.2";
+const VERSION = "0.3.3";
 
 // Fuzzy matching is now in ./fuzzy.ts (trigram-union regex + Levenshtein
 // post-filter; handles drop/insert/substitute/swap up to edit distance 2).
@@ -71,6 +73,25 @@ async function main(): Promise<number> {
     }
     if (err instanceof VersionRequestedError) {
       process.stdout.write(`mpg ${VERSION}\n`);
+      return 0;
+    }
+    if (err instanceof ServeRequestedError) {
+      const { startStdioServer, startHttpServer } = await import("./server.js");
+      if (err.http) {
+        const srv = await startHttpServer({ port: err.port, host: err.host });
+        process.stderr.write(`mpg server listening on http://${err.host}:${srv.port}\n`);
+        const shutdown = async () => { await srv.close(); process.exit(0); };
+        process.on("SIGINT", shutdown);
+        process.on("SIGTERM", shutdown);
+        await new Promise<void>(() => {});
+        return 0;
+      }
+      await startStdioServer();
+      return 0;
+    }
+    if (err instanceof ToolSpecRequestedError) {
+      const { buildToolSpec } = await import("./tool-spec.js");
+      process.stdout.write(JSON.stringify(buildToolSpec(err.fmt), null, 2) + "\n");
       return 0;
     }
     if (err instanceof PrintEntryRequestedError) {

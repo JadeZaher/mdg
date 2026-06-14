@@ -212,7 +212,7 @@ mpg_search({
 })
 ```
 
-On the compaction bench, this single CLI call beats LLM-driven summarization (67% pass vs 33%) at **zero LLM input tokens**. Use when you'd otherwise spend a 50k-token summarization round-trip.
+On the compaction bench, this single CLI call beats LLM-driven summarization (56% pass vs 44%, n=3 topics) at **zero LLM input tokens**. Use when you'd otherwise spend a 50k-token summarization round-trip.
 
 **5. Whole-repo scan ("does X appear anywhere?")**
 
@@ -368,9 +368,9 @@ Typical workflow:
 
 ```bash
 # 1. Build stashes as you investigate, with consistent tags
-mpg "JWT" --in src/auth/  --mp-stash auth-jwt   --mp-tag rewrite --mp-ttl 24h
-mpg "JWT" --in docs/spec/ --mp-stash spec-jwt   --mp-tag rewrite --mp-ttl 24h
-mpg "JWT" --in src/legacy/ --mp-stash legacy-jwt --mp-tag rewrite --mp-ttl 24h
+mpg "JWT" --in src/auth/  --mp-stash auth-jwt   --mp-stash-tag rewrite --mp-ttl 24h
+mpg "JWT" --in docs/spec/ --mp-stash spec-jwt   --mp-stash-tag rewrite --mp-ttl 24h
+mpg "JWT" --in src/legacy/ --mp-stash legacy-jwt --mp-stash-tag rewrite --mp-ttl 24h
 
 # 2. Link them as you discover relationships
 mpg --mp-link auth-jwt spec-jwt see-also "implementation of the spec"
@@ -419,6 +419,106 @@ The full set of graph operations is CLI-only (not MCP yet) —
   `--mp-related` on the *target* of the suspected edge — that view is
   always bidirectional.
 
+**10. Warm-process mode — eliminate cold-start**
+
+Node cold-start costs ~1.1 s per `mpg` CLI invocation. Warm-process mode
+pays that cost once, then handles subsequent calls at ~10 ms.
+
+**When to use:** any session where you'll make >5 mpg calls, or where an
+MCP/agent harness calls mpg repeatedly in a loop.
+
+**Stdio mode** (NDJSON, one request per line in, one response per line out):
+
+```bash
+mpg --serve
+```
+
+Send requests as `{"id":"1","method":"search","params":{...}}`, receive
+`{"id":"1","result":{...}}` or `{"id":"1","error":{"code":...,"message":"..."}}`.
+
+**HTTP mode:**
+
+```bash
+mpg --serve-http --port 17317
+```
+
+All methods available via `POST /` with body `{"method":"...","params":{...}}`.
+Health check: `GET /health` → `{"ok":true,"version":"...","palace_path":"..."}`.
+
+Available methods (both modes):
+
+```
+search
+palace.list    palace.get     palace.stash   palace.drop
+palace.compose palace.intersect palace.except
+palace.link    palace.graph
+palace.prune_expired  palace.prune_tag  palace.prune_older_than  palace.prune_keep
+tool_spec      health
+```
+
+Quick rule: MCP host users get warm-process automatically (the MCP server is
+always warm). CLI shell-out users who make many calls per session should start
+`mpg --serve-http` once and hit it, rather than shelling out N times.
+
+**11. Agent envelope — make pattern-quality visible**
+
+By default `--format json` returns nodes but not signal about whether the
+pattern itself was any good. Use `--format agent-json` when your agent loop
+needs to iterate on pattern quality:
+
+```json
+{
+  "status": "...",
+  "pattern": "...",
+  "n_literal_matches": 12,
+  "n_fuzzy_matches": 3,
+  "fallback_used": false,
+  "warning": "...",
+  "nodes": [...],
+  "next_suggestion": "...",
+  "errors": [...]
+}
+```
+
+Why it matters: `n_literal_matches` + `warning` + `next_suggestion` expose
+whether a near-zero result is because the corpus truly has nothing vs because
+the pattern was bad. An agent loop can inspect `warning` and try
+`next_suggestion` before concluding "nothing here." Pair with `--no-fill` for
+strictest signal.
+
+**12. `--no-fill` strict mode**
+
+By default, `--strategy fill` pads results to the token budget with
+low-rank matches, which can hide bad-pattern signal behind plausible-looking
+noise. `--no-fill` returns fewer nodes when the relevance threshold isn't met:
+
+```bash
+mpg "myPattern" --in src/ --no-fill --format agent-json
+```
+
+In agent loops where you want to measure pattern quality empirically, use
+`--no-fill`. The `agent-json` `warning` field will say
+`"strict mode: only N usable matches found"` when this kicks in. Without
+`--no-fill`, `fill` padding makes every search look superficially complete.
+
+**13. Bootstrapping a tool-calling agent loop**
+
+Print ready-to-use JSON schema for mpg's tool surface in whatever format
+your agent SDK expects:
+
+```bash
+mpg tool-spec --format openai      # OpenAI function-calling schema
+mpg tool-spec --format anthropic   # Anthropic tool_use schema
+mpg tool-spec --format gemini      # Gemini function declaration schema
+```
+
+Redirect into a file and splice into your agent's `tools` array. Saves
+writing the schemas by hand and keeps them in sync with the installed version:
+
+```bash
+mpg tool-spec --format anthropic > .omc/mpg-tool-spec.json
+```
+
 ### Behavior you can rely on
 
 These are the load-bearing guarantees worth quoting at yourself before
@@ -431,6 +531,16 @@ deciding whether to re-search vs recall:
   a tmp-file + rename plus a sibling `.lock` serialize the write step,
   and a diff-based merge means each writer's intent (added X, modified
   Y, removed Z) is replayed on top of fresh on-disk state.
+- **Stash nodes carry staleness signals.** Stashes created against file
+  sources record `source_mtime_ms` and `match_line_hash`. On retrieval each
+  node carries a `stale` field:
+  - `false` — file untouched since capture; safe to use.
+  - `"unknown"` — legacy stash without provenance; treat as potentially stale.
+  - `true` with `stale_reason`: `"file_missing"` | `"mtime_advanced"` |
+    `"mtime_advanced_content_intact"` | `"content_drifted"`.
+  Agent decision rule: re-fetch (or call `refreshStash`) when reason is
+  `"file_missing"` or `"content_drifted"`. `"mtime_advanced_content_intact"`
+  means the timestamp moved but the matched lines didn't — usually safe.
 - **`--mp-drop` persists.** When drop reports success, the entry is
   gone from disk and stays gone — even if a follow-up stash from
   another process commits afterwards. Treat the exit code as truth.
@@ -537,7 +647,7 @@ Headline numbers from `BENCHMARKS.md` (oasis-sleek conductor tracks corpus — m
 | :--- | :--- | :--- |
 | Literal recall vs **ripgrep** | `scan + clip_chars: 30` | 100% / 100% / **377 tokens** vs rg's 1197 — **3.2× cheaper than rg** |
 | Typo recovery | `fuzzy: true` | 100% recall vs rg's 0%, 89% precision, ~1900 tokens. Embeddings get 45% at 23,610 tokens. |
-| Compaction at fixed budget | `scan + clip + max_tokens` (no LLM) | 67% pass beats LLM summarization (33%) at zero LLM cost |
+| Compaction at fixed budget | `scan + clip + max_tokens` (no LLM) | 56% pass beats LLM summarization (44%) at zero LLM cost (n=3 topics) |
 | Multi-turn convergence | treatment uses mpg + stash | 24% fewer input tokens, **half the tool calls and turns** vs control |
 | Mind palace set semantics | `compose` / `intersect` / `except` / graph | 17/17 micro assertions pass |
 

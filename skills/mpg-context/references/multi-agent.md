@@ -122,7 +122,7 @@ Tag with the agent or task ID too:
 
 ```bash
 mpg "TODO" --in src/ --mp-stash w1-auth "Worker 1 auth findings" \
-  --mp-tag worker1 --mp-tag task-42
+  --mp-stash-tag worker1 --mp-stash-tag task-42
 ```
 
 That makes `--mp-list-tag worker1` or `--mp-prune-tag worker1` work

@@ -23,7 +23,7 @@ SEARCH   →   STASH    →   COMPOSE / FROM / INTERSECT / EXCEPT
 | :--- | :--- |
 | `--mp-stash <name> <note>` | Save current search's results. Merges into existing (dedup by file:line) unless `--mp-replace`. |
 | `--mp-stash-note <note>` | Set note separately from the stash flag. |
-| `--mp-stash-tag <tag>` / `--mp-tag <tag>` | Tag the stash (repeatable). |
+| `--mp-stash-tag <tag>` | Tag the stash (repeatable). `--mp-tag` is accepted as an alias. |
 | `--mp-replace` | Overwrite an existing stash outright. |
 | `--mp-ttl <duration>` | Auto-expiry (`30m`, `2h`, `7d`). Expired stashes are reaped on next `--mp-list` / `--mp-get`. |
 | `--mp-stash-locations` | Save only file:line pointers (no context text). Use for lean stashes when you'll re-search later. |
@@ -108,9 +108,9 @@ then traverse by intent in future sessions.
 
 ```bash
 # Session 1 — building the topology
-mpg "JWT" --in src/auth/   --mp-stash auth-jwt    --mp-tag rewrite --mp-ttl 24h
-mpg "JWT" --in docs/spec/  --mp-stash spec-jwt    --mp-tag rewrite --mp-ttl 24h
-mpg "JWT" --in src/legacy/ --mp-stash legacy-jwt  --mp-tag rewrite --mp-ttl 24h
+mpg "JWT" --in src/auth/   --mp-stash auth-jwt    --mp-stash-tag rewrite --mp-ttl 24h
+mpg "JWT" --in docs/spec/  --mp-stash spec-jwt    --mp-stash-tag rewrite --mp-ttl 24h
+mpg "JWT" --in src/legacy/ --mp-stash legacy-jwt  --mp-stash-tag rewrite --mp-ttl 24h
 
 mpg --mp-link auth-jwt spec-jwt   see-also   "implementation of the spec"
 mpg --mp-link auth-jwt legacy-jwt supersedes "post-rewrite, legacy goes away"

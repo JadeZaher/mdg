@@ -28,15 +28,23 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { dirname, resolve as resolvePath, join } from "node:path";
 import type { Node, Source } from "./types.js";
 
-export const PALACE_VERSION = 1;
+/**
+ * On-disk format version.
+ *   1 → original schema (no staleness fields).
+ *   2 → added optional StashedNode.source_mtime_ms + match_line_hash.
+ *       Files with version < 2 (or no version) load fine — both fields
+ *       are optional and default-safe; no migration step is required.
+ */
+export const PALACE_VERSION = 2;
 export const DEFAULT_PALACE_FILENAME = "mind-palace.json";
 export const DEFAULT_PALACE_DIR = ".mpg";
 
@@ -86,6 +94,36 @@ export interface StashedNode {
   match_text: string;
   context_after: string[];
   tokens: number;
+  /**
+   * File modification time (ms since epoch) at capture time.
+   * Present only for file-source nodes. Used for staleness detection.
+   * Optional — legacy stashes without this field are treated as "unknown" freshness.
+   */
+  source_mtime_ms?: number;
+  /**
+   * 12-hex-char SHA1 of the matched line's trimmed text at capture time.
+   * Anchor: match_text is used (the raw matched line before context). If match_text
+   * is empty, falls back to the first non-empty context_before or context_after line.
+   * Optional — legacy stashes without this field skip content-drift detection.
+   */
+  match_line_hash?: string;
+}
+
+/**
+ * Staleness state for a stashed node, computed at fetch time.
+ *   false          — node appears fresh.
+ *   true           — node is definitely stale (see stale_reason).
+ *   "unknown"      — no capture-time metadata; freshness cannot be determined.
+ */
+export type StaleState = boolean | "unknown";
+
+export interface StalenessInfo {
+  stale: StaleState;
+  stale_reason?:
+    | "file_missing"
+    | "mtime_advanced"
+    | "mtime_advanced_content_intact"
+    | "content_drifted";
 }
 
 export interface Palace {
@@ -400,20 +438,71 @@ export function savePalace(path: string, palace: Palace): void {
   }
 }
 
+/**
+ * Compute a 12-char SHA1 hex digest of the given line's trimmed text.
+ * Used as a lightweight content-drift detector. Returns undefined on error.
+ */
+function hashLine(line: string): string | undefined {
+  try {
+    return createHash("sha1").update(line.trim()).digest("hex").slice(0, 12);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Pick the best single-line anchor for match_line_hash.
+ * Preference: match_text (the raw matched line) — it's the most stable
+ * and directly corresponds to the match_line number. Falls back to the
+ * last context_before line, then first context_after line.
+ */
+function pickAnchorLine(n: Node): string {
+  if (n.match_text && n.match_text.trim().length > 0) return n.match_text;
+  for (let i = n.context_before.length - 1; i >= 0; i--) {
+    if (n.context_before[i].trim().length > 0) return n.context_before[i];
+  }
+  for (const l of n.context_after) {
+    if (l.trim().length > 0) return l;
+  }
+  return n.match_text;
+}
+
+/**
+ * Capture source_mtime_ms for a file-source node.
+ * Returns undefined if the file doesn't exist or stat fails.
+ */
+function captureFileMtime(filePath: string): number | undefined {
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Convert full Node objects into the compact StashedNode form. */
 export function stashNodes(nodes: Node[]): StashedNode[] {
-  return nodes.map((n) => ({
-    source: n.source.id,
-    file_path: n.source.type === "file" ? n.source.id : null,
-    source_type: n.source.type,
-    match_line: n.match_line,
-    start_line: n.start_line,
-    end_line: n.end_line,
-    context_before: n.context_before,
-    match_text: n.match_text,
-    context_after: n.context_after,
-    tokens: n.tokens,
-  }));
+  return nodes.map((n) => {
+    const isFile = n.source.type === "file";
+    const base: StashedNode = {
+      source: n.source.id,
+      file_path: isFile ? n.source.id : null,
+      source_type: n.source.type,
+      match_line: n.match_line,
+      start_line: n.start_line,
+      end_line: n.end_line,
+      context_before: n.context_before,
+      match_text: n.match_text,
+      context_after: n.context_after,
+      tokens: n.tokens,
+    };
+    if (isFile) {
+      const mtime = captureFileMtime(n.source.id);
+      if (mtime !== undefined) base.source_mtime_ms = mtime;
+      const hash = hashLine(pickAnchorLine(n));
+      if (hash !== undefined) base.match_line_hash = hash;
+    }
+    return base;
+  });
 }
 
 /** Reverse: turn StashedNodes back into Sources (unique file paths). */
@@ -625,18 +714,176 @@ function dedup(arr: string[]): string[] {
 
 /** Lightweight stash: only (source, line, match_text), no context buffers. */
 export function stashNodesLocations(nodes: Node[]): StashedNode[] {
-  return nodes.map((n) => ({
-    source: n.source.id,
-    file_path: n.source.type === "file" ? n.source.id : null,
-    source_type: n.source.type,
-    match_line: n.match_line,
-    start_line: n.match_line,
-    end_line: n.match_line,
-    context_before: [],
-    match_text: n.match_text,
-    context_after: [],
-    tokens: 0,
+  return nodes.map((n) => {
+    const isFile = n.source.type === "file";
+    const base: StashedNode = {
+      source: n.source.id,
+      file_path: isFile ? n.source.id : null,
+      source_type: n.source.type,
+      match_line: n.match_line,
+      start_line: n.match_line,
+      end_line: n.match_line,
+      context_before: [],
+      match_text: n.match_text,
+      context_after: [],
+      tokens: 0,
+    };
+    if (isFile) {
+      const mtime = captureFileMtime(n.source.id);
+      if (mtime !== undefined) base.source_mtime_ms = mtime;
+      const hash = hashLine(pickAnchorLine(n));
+      if (hash !== undefined) base.match_line_hash = hash;
+    }
+    return base;
+  });
+}
+
+// ─── Staleness detection ─────────────────────────────────────────────
+
+/**
+ * Compute current staleness state for a single stashed node.
+ *
+ * Rules (in priority order):
+ *   1. No file_path (cmd/url/stdin source) → stale: false (not applicable).
+ *   2. No capture-time metadata (legacy stash) → stale: "unknown".
+ *   3. File is missing now → stale: true, reason: "file_missing".
+ *   4. source_mtime_ms exists AND current mtime > stored:
+ *        a. Re-read line at match_line; if hash differs → "content_drifted".
+ *        b. Hash still matches → "mtime_advanced_content_intact".
+ *   5. Otherwise → stale: false.
+ */
+export function computeNodeStaleness(node: StashedNode): StalenessInfo {
+  // Non-file sources are not subject to staleness.
+  if (!node.file_path) return { stale: false };
+
+  // Legacy stash: no capture metadata → unknown freshness.
+  if (node.source_mtime_ms === undefined && node.match_line_hash === undefined) {
+    return { stale: "unknown" };
+  }
+
+  // File missing?
+  if (!existsSync(node.file_path)) {
+    return { stale: true, stale_reason: "file_missing" };
+  }
+
+  // mtime check.
+  if (node.source_mtime_ms !== undefined) {
+    let currentMtime: number;
+    try {
+      currentMtime = statSync(node.file_path).mtimeMs;
+    } catch {
+      // Can't stat — treat as missing.
+      return { stale: true, stale_reason: "file_missing" };
+    }
+    if (currentMtime > node.source_mtime_ms) {
+      // mtime advanced — check if content at that line drifted.
+      if (node.match_line_hash !== undefined) {
+        let currentHash: string | undefined;
+        try {
+          const content = readFileSync(node.file_path, "utf8");
+          const lines = content.split(/\r?\n/);
+          // match_line is 1-indexed.
+          const lineText = lines[node.match_line - 1] ?? "";
+          currentHash = hashLine(lineText);
+        } catch {
+          // Can't read file — assume content drifted.
+          return { stale: true, stale_reason: "content_drifted" };
+        }
+        if (currentHash !== undefined && currentHash === node.match_line_hash) {
+          return { stale: true, stale_reason: "mtime_advanced_content_intact" };
+        }
+        return { stale: true, stale_reason: "content_drifted" };
+      }
+      // No hash to compare — mtime advanced, content status unknown.
+      return { stale: true, stale_reason: "mtime_advanced" };
+    }
+  }
+
+  return { stale: false };
+}
+
+/**
+ * Annotate stash nodes with current staleness info.
+ * Returns a new array of { node, staleness } pairs without mutating the stash.
+ */
+export function annotateStashStaleness(
+  stash: Stash,
+): Array<{ node: StashedNode; staleness: StalenessInfo }> {
+  return stash.nodes.map((node) => ({
+    node,
+    staleness: computeNodeStaleness(node),
   }));
+}
+
+// ─── Refresh ─────────────────────────────────────────────────────────
+
+export interface RefreshResult {
+  ok: boolean;
+  reason?: string;
+  /** Number of nodes replaced on success. */
+  nodes_replaced?: number;
+}
+
+/**
+ * Re-run the original search pattern against the original source set
+ * captured in the stash, then replace the stash's nodes with fresh ones.
+ *
+ * Returns { ok: false, reason: "legacy_stash_missing_provenance" } when
+ * the stash was created without a pattern or sources (pre-staleness schema).
+ *
+ * NOTE: This function is intentionally NOT wired to any CLI flag.
+ * It is exported for W4 (or other callers) to surface via CLI.
+ *
+ * @param name - Name of the stash to refresh.
+ * @param opts - Optional overrides (palace path).
+ */
+export async function refreshStash(
+  name: string,
+  opts: { palacePath?: string } = {},
+): Promise<RefreshResult> {
+  const palacePath = opts.palacePath ?? defaultPalacePath();
+  const palace = loadPalace(palacePath);
+  const existing = palace.stashes[name];
+  if (!existing) {
+    return { ok: false, reason: `stash_not_found: ${name}` };
+  }
+
+  // Provenance check: we need at minimum a non-empty pattern and file paths.
+  const pattern = existing.search?.pattern;
+  const filePaths = existing.file_paths ?? [];
+  if (!pattern || filePaths.length === 0) {
+    return { ok: false, reason: "legacy_stash_missing_provenance" };
+  }
+
+  // Dynamically import search to avoid circular deps at module load time.
+  // (api.ts imports mind-palace.ts; mind-palace.ts should not import api.ts
+  //  at the top level — dynamic import breaks the cycle at runtime only.)
+  let searchFn: (opts: { pattern: string; in: string[]; effort: string }) => Promise<{ nodes: Node[] }>;
+  try {
+    const api = await import("./api.js");
+    searchFn = api.search as typeof searchFn;
+  } catch {
+    return { ok: false, reason: "could_not_import_search_api" };
+  }
+
+  let result: { nodes: Node[] };
+  try {
+    result = await searchFn({
+      pattern,
+      in: filePaths,
+      effort: existing.search.effort ?? "normal",
+    });
+  } catch (err) {
+    return { ok: false, reason: `search_failed: ${(err as Error).message}` };
+  }
+
+  const newNodes = stashNodes(result.nodes);
+  const now = new Date().toISOString();
+  existing.nodes = newNodes;
+  existing.updated_at = now;
+
+  savePalace(palacePath, palace);
+  return { ok: true, nodes_replaced: newNodes.length };
 }
 
 // ─── Timestamp utilities ─────────────────────────────────────────────
